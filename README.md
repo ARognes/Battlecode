@@ -1,0 +1,2 @@
+# Battlecode
+MIT Battlecode competition
