@@ -1,9 +1,5 @@
-package MinerPathfinding;
+package TangentBug;
 import battlecode.common.*;
-
-/**
- * @author Austin Rognes
- **/
 
 /**
  * Implemented the Tangent Bug from https://www.cs.cmu.edu/~motionplanning/lecture/Chap2-Bug-Alg_howie.pdf
@@ -113,7 +109,20 @@ public strictfp class RobotPlayer {
                 
                 // Top priority: Find closest soup. Soup location relative to HQ position
                 MapLocation soupLoc = null;
-                int rcRange = rc.getCurrentSensorRadiusSquared();
+
+                int soupDist = 1000;
+                for(MapLocation thisSoupLoc : rc.senseNearbySoup()) {
+                    if(soupLoc == null || hqLoc.distanceSquaredTo(thisSoupLoc) < soupDist) {   // If this soup is closer than closest soup
+                        soupLoc = thisSoupLoc;                                             // This soup is closest soup
+                        soupDist = hqLoc.distanceSquaredTo(soupLoc);                // Save distance to closest soup for multiple uses
+                        if(soupDist < 3) break;                                     // If radius squared is 2 or 1 then it is adjacent, so stop search
+                    }
+                }
+
+                soupLoc = soupLoc.translate(-hqLoc.x, -hqLoc.y);
+
+                /*int rcRange = rc.getCurrentSensorRadiusSquared();
+                logBytecodes();
                 
                 // Check all tiles of radius or less
                 for(int i = -7; i < 8; i++) {
@@ -127,6 +136,7 @@ public strictfp class RobotPlayer {
                         rc.setIndicatorDot(new MapLocation(hqLoc.x + i, hqLoc.y + j), 0, 0, 255);
                     }
                 }
+                logBytecodes();*/
 
                 // Find that soup!
                 if(soupLoc != null) {
@@ -251,33 +261,43 @@ public strictfp class RobotPlayer {
                 else if(soupLoc != null) pathfind(rcLoc, soupLoc, localMap);  // soupLoc is not relative here
 
                 if(rcState == 0 && soupLoc == null) {    // Still searching for soup and haven'd found any?
-                    for(int i = -5; i < 6; i++) {   // Check all tiles of radius for soup!
-                        //rcRange = rc.getCurrentSensorRadiusSquared();
-                        for(int j= -5; j < 6; j++) {
-                            MapLocation l = new MapLocation(rcLoc.x + i, rcLoc.y + j);
-                            if(l.x < 0 || l.x >= mapWidth) break;
-                            if(l.y < 0 || l.y >= mapHeight || i * i + j * j >= rc.getCurrentSensorRadiusSquared()) continue;
 
-                            // Find closest soup!
-                            if(rc.senseSoup(l) > 0 && (soupLoc == null || i * i + j * j < soupLoc.x * soupLoc.x + soupLoc.y * soupLoc.y)) soupLoc = new MapLocation(i, j);
-
-                            // TODO Add all soup to Array or ArrayList
+                    int soupDist = 1000;
+                    for(MapLocation thisSoupLoc : rc.senseNearbySoup()) {
+                        if(soupLoc == null || rcLoc.distanceSquaredTo(thisSoupLoc) < soupDist) {   // If this soup is closer than closest soup
+                            soupLoc = thisSoupLoc;                                             // This soup is closest soup
+                            soupDist = rcLoc.distanceSquaredTo(soupLoc);                // Save distance to closest soup for multiple uses
+                            if(soupDist < 3) break;                                     // If radius squared is 2 or 1 then it is adjacent, so stop search
                         }
                     }
 
-                    if(soupLoc != null) {                                               // Found soup?
-                        //System.out.println("I smell SOUP! " + soupLoc);                   // DEBUG
-                        //distInit = soupLoc.x * soupLoc.x + soupLoc.y * soupLoc.y;           // Record initial distance from soup
-                        soupLoc = soupLoc.translate(rcLoc.x, rcLoc.y);  // Soup location was relative to Miner location, offset by Miner location
-                        rc.setIndicatorDot(soupLoc, 255, 255, 255);
-                        //System.out.println("FOUND SOUP!");
+                    if(soupLoc == null) {                                                              // Wander away from spawn in spiral or search for mirror
+                        
+                        
+                        MapLocation symmetricalLoc = new MapLocation(mapWidth - hqLoc.x, hqLoc.y);
+                        soupLoc = symmetricalLoc;
+                        int currDist = rcLoc.distanceSquaredTo(symmetricalLoc);
+
+                        currDist = rcLoc.distanceSquaredTo(symmetricalLoc);
+                        symmetricalLoc = new MapLocation(hqLoc.x, mapHeight - hqLoc.y);
+                        int checkDist = rcLoc.distanceSquaredTo(symmetricalLoc);
+                        if(checkDist < currDist) {
+                            currDist = checkDist;
+                            soupLoc = symmetricalLoc;
+                        }
+
+                        currDist = rcLoc.distanceSquaredTo(symmetricalLoc);
+                        symmetricalLoc = new MapLocation(mapWidth - hqLoc.x, mapHeight - hqLoc.y);    // This should be rotational, not xy-flip
+                        checkDist = rcLoc.distanceSquaredTo(symmetricalLoc);
+                        if(checkDist < currDist) {
+                            currDist = checkDist;
+                            soupLoc = symmetricalLoc;
+                        }
+
+                        //if(rc.canMove(Direction.NORTH)) rc.move(Direction.NORTH);
+                        //rc.setIndicatorDot(rcLoc, 255, 255, 255);
                     }
-                    else {                                                              // Wander away from spawn in spiral
-                        if(rc.canMove(Direction.NORTH)) rc.move(Direction.NORTH);
-                        rc.setIndicatorDot(rcLoc, 255, 255, 255);
-                        //if() System.out.println("I am wandering!");
-                        //else moveDir = Direction.allDirections()[random.nextInt(8)];
-                    }
+                    else rc.setIndicatorDot(soupLoc, 255, 255, 255);
                 }
             }
 
@@ -390,8 +410,8 @@ public strictfp class RobotPlayer {
                                     else checkingIndex += 4;
                                 }
 
-                                //if(localMap[checkingIndex]) rc.setIndicatorDot(new MapLocation(rcLoc.x + checkX, rcLoc.y + checkY), 0, 0, 255);
-                                //else rc.setIndicatorDot(new MapLocation(rcLoc.x + checkX, rcLoc.y + checkY), 255 - 64 * j, 0, 0);
+                                if(localMap[checkingIndex]) rc.setIndicatorDot(new MapLocation(rcLoc.x + checkX, rcLoc.y + checkY), 0, 0, 255);
+                                else rc.setIndicatorDot(new MapLocation(rcLoc.x + checkX, rcLoc.y + checkY), 255 - 64 * j, 0, 0);
 
                                 previousDir = rcLoc.directionTo(new MapLocation(checkX + rcLoc.x, checkY + rcLoc.y));   // Save direction from start to this tile, in case barrier is hit next iteration
 
@@ -450,8 +470,8 @@ public strictfp class RobotPlayer {
                                     else checkingIndex += 4;
                                 }
 
-                                //if(localMap[checkingIndex]) rc.setIndicatorDot(new MapLocation(rcLoc.x + checkX, rcLoc.y + checkY), 0, 0, 255);
-                                //else rc.setIndicatorDot(new MapLocation(rcLoc.x + checkX, rcLoc.y + checkY), 255 - 64 * j, 0, 0);
+                                if(localMap[checkingIndex]) rc.setIndicatorDot(new MapLocation(rcLoc.x + checkX, rcLoc.y + checkY), 0, 0, 255);
+                                else rc.setIndicatorDot(new MapLocation(rcLoc.x + checkX, rcLoc.y + checkY), 255 - 64 * j, 0, 0);
 
                                 previousDir = rcLoc.directionTo(new MapLocation(checkX + rcLoc.x, checkY + rcLoc.y));   // Save direction from start to this tile, in case barrier is hit next iteration
 
