@@ -28,8 +28,11 @@ public strictfp class RobotPlayer {
     static MapLocation soupLoc;  // Used by Miner
 
     static boolean boundaryFollow;  // Used by pathfinding
-    //static int dLeave;
-    //static int dMin;
+    static Direction moveDir;
+    static int consecutiveTurns;
+    static boolean clockwise;
+    static MapLocation startLoc;
+    static int dMin;
 
 
     /**
@@ -63,6 +66,7 @@ public strictfp class RobotPlayer {
                     if (nearbyRobots[i].getType() == RobotType.HQ) {
                         hqLoc = nearbyRobots[i].getLocation();
                         soupLoc = null;
+                        clockwise = (rc.getLocation().x % 2 == 0) ? true : false;   // Randomize somewhata
                         break;
                     }
                 }
@@ -170,59 +174,7 @@ public strictfp class RobotPlayer {
     static void runMiner() throws GameActionException {
         int rcRange = rc.getCurrentSensorRadiusSquared();
         MapLocation rcLoc = rc.getLocation();
-        //RobotInfo[] senseRobots = rc.senseNearbyRobots();
-
-        // 325
-
-        /*boolean[] localMap = new boolean[109];                                              // boolean map of moveable locations within radius              TODO shorten this! If only front tiles are checked, don't check tiles behind Miner!
-        for(int i=0; i<senseRobots.length; i++) {                                           // Mark every localMap element with a Robot as true
-            MapLocation robot = senseRobots[i].getLocation().translate(-rcLoc.x, -rcLoc.y); // Get Robot position relative to Miner
-            int localIndex = 54 +  11 * robot.x - robot.y;                                  // Transform x and y coordinates relative to Miner, to Miner radius index coordinates
-            switch(robot.x) {
-                case -5: localIndex += 4; break;
-                case -4: localIndex++; break;
-                case 4: localIndex--; break;
-                case 5: localIndex -= 4; break;
-            }
-            localMap[localIndex] = true;
-            rc.setIndicatorDot(robot.translate(rcLoc.x, rcLoc.y), 255, 0, 0);   // DEBUG This can be off by one if this robot senser before another robot moves
-        }*/
-        // 545
-
-        /*int rcElev = rc.senseElevation(rcLoc);
-        MapLocation globLoc;
-        for(int i=0; i<localMap.length; i++) {  // Mark every localMap element flooded or elevation blocked as true
-            if(localMap[i]) continue;
-
-            switch(i) {                 // Offset for sense range's circle curves
-                case 0: case 1: case 2: case 3: case 4: case 5: case 6:
-                    globLoc = new MapLocation(-5, i - 3);
-                    break;
-                case 7: case 8: case 9: case 10: case 11: case 12: case 13: case 14: case 15:
-                    globLoc = new MapLocation(-4, i - 11);
-                    break;
-                case 93: case 94: case 95: case 96: case 97: case 98: case 99: case 100: case 101:
-                    globLoc = new MapLocation(4, i - 97);
-                    break;
-                case 102: case 103: case 104: case 105: case 106: case 107: case 108:
-                    globLoc = new MapLocation(5, i - 105);
-                    break;
-                default:
-                    globLoc = new MapLocation((i-5) / 11 - 4, 5 - (i-5) % 11);
-            }
-
-            if(globLoc.x * globLoc.x + globLoc.y * globLoc.y > rcRange) continue;
-            globLoc = globLoc.translate(rcLoc.x, rcLoc.y);
-            if(globLoc.x < 0 || globLoc.x >= mapWidth || globLoc.y < 0 || globLoc.y >= mapHeight) continue;
-
-            //System.out.println(globLoc.toString() + ", " + rcRange);
-            if(rc.senseFlooding(globLoc)) {
-                localMap[i] = true;
-                //rc.setIndicatorDot(globLoc, 0, 255, 255);       // DEBUG
-                //System.out.println("Water! " + globLoc.toString());       // DEBUG
-            }
-            else if(Math.abs(rc.senseElevation(globLoc) - rcElev) > 3) localMap[i] = true;
-        }*/
+        //System.out.println("CD: " + rc.getCooldownTurns());
         
         if(rc.isReady()) {  // Cooldown < 1
             int soupAmount = rc.getSoupCarrying();
@@ -236,7 +188,8 @@ public strictfp class RobotPlayer {
                     if(rc.getSoupCarrying() < 1) {
                         System.out.println("Deposited soup!");                      // DEBUG
                         rcState = 0;                                                // Go collect more soup!
-                        soupLoc = null;
+                        soupLoc = null;   // Set soup to null unless an array of far away soup in 
+                        boundaryFollow = false;
                     }
                 }
                 else pathfind(rcLoc, hqLoc/*, localMap*/);                      // HQ not neighbor? Keep searching for Refinery
@@ -249,10 +202,25 @@ public strictfp class RobotPlayer {
                     if(tryMine(dir)) rcState = 1;                   // Mined soup? Stop searching
                 
                 soupAmount = rc.getSoupCarrying();
-                //if(rcState == 1) System.out.println("Slurped " + soupAmount + " slurps!"); // DEBUG
-                if(soupAmount == RobotType.MINER.soupLimit) rcState = 2;   // Full? Go search for Refinery
-                else if(rcState == 0 && wasMining) soupLoc = null;   // If no more soup, but not full, restart search!
-                else if(soupLoc != null) pathfind(rcLoc, soupLoc/*, localMap*/);  // soupLoc is not relative here
+                if(rcState == 1) System.out.println("Slurped " + soupAmount + " slurps!"); // DEBUG
+
+                if(wasMining) {
+                    if(soupAmount == RobotType.MINER.soupLimit) {
+                        soupLoc = hqLoc;
+                        rcState = 2;   // Full? Go search for Refinery
+                        if(boundaryFollow) {    // If had to bug in, reverse bug out
+                            clockwise = !clockwise;
+                            moveDir = moveDir.opposite();
+                            consecutiveTurns =0;
+                            startLoc = rcLoc;
+
+                            dMin = Math.max(Math.abs(hqLoc.x - rcLoc.x), Math.abs(hqLoc.y - rcLoc.y));
+                        }
+                    }
+                    else soupLoc = null;   // If no more soup, but not full, restart search!
+                }
+
+                if(soupLoc != null) pathfind(rcLoc, soupLoc);
 
                 if(rcState == 0 && soupLoc == null) {    // Still searching for soup and haven'd found any?
 
@@ -311,28 +279,58 @@ public strictfp class RobotPlayer {
 
         int startEndX = endLoc.x - rcLoc.x;                 // Vector from start to end
         int startEndY = endLoc.y - rcLoc.y;
-        //int dMin = (int)Math.max(Math.abs(startEndX), Math.abs(startEndY));  // Min amount of moves needed to get from start to end
 
         int checkX = 0; // Vector from start to checking tile
         int checkY = 0;
         int checkingIndex; // Index of checking tile in localMap
 
-        //Direction previousDir = rcLoc.directionTo(endLoc);  // Direction from start to end
-        //Direction previousDir = Direction.CENTER;
-
-        //int previousCost = distInt;                         // Heuristic: cost of moving from current position to end, COULD be further than sense range!
-
-        //Direction costDir = previousDir;    // Save direction before first collision
-        //int cost = previousCost;            // Save cost of tile before first collision
-
-
         Direction optimalDir = Direction.CENTER;
         int optimalCost = (int)Math.max(Math.abs(startEndX), Math.abs(startEndY));  // Min amount of moves needed to get from start to end
         //int dCost = dMin;
 
-
         if(boundaryFollow) {    // Follow boundary out of concave shape
+            // Check
+            //System.out.println(moveDir.toString());
+            rc.setIndicatorDot(rcLoc.add(moveDir), 255, 255, 0);
+            
+            //if(consecutiveTurns < 3) 
+            moveDir = clockwise ? moveDir.rotateRight() : moveDir.rotateLeft();
 
+            MapLocation checkLoc = rcLoc.add(moveDir);
+            int i;
+
+            for(i = 0; i<8; i++) {
+                if(rc.canSenseLocation(checkLoc) ? (Math.abs(rc.senseElevation(checkLoc) - rcElev) > 3 || rc.senseFlooding(checkLoc) || rc.isLocationOccupied(checkLoc)) : true) { // Hit something
+                    moveDir = clockwise ? moveDir.rotateLeft() : moveDir.rotateRight();
+                    checkLoc = rcLoc.add(moveDir);
+                } else break;
+            }
+
+            System.out.println(i);
+
+            rc.setIndicatorDot(rcLoc.add(moveDir), 0, 255, 0);
+            if(i < 8 && rc.canMove(moveDir)) rc.move(moveDir);
+
+            //System.out.println(">" + moveDir.toString());
+            
+            if(moveDir.dx != 0 && moveDir.dy != 0) {
+                if(i == 0) consecutiveTurns++;
+                else consecutiveTurns = 0;
+
+                if(consecutiveTurns < 4) moveDir = clockwise ? moveDir.rotateRight() : moveDir.rotateLeft();
+                else {
+                    moveDir = clockwise ? moveDir.opposite().rotateLeft() : moveDir.opposite().rotateRight();
+                    consecutiveTurns = 0;
+                    //clockwise = !clockwise;
+                }
+            } else consecutiveTurns = 0;
+
+            if(startLoc.x == checkLoc.x && startLoc.y == checkLoc.y) {
+                System.out.println("Full Trip! " + startLoc.toString());
+                moveDir = Direction.CENTER;
+            }
+
+            if(Math.max(Math.abs(startEndX), Math.abs(startEndY)) < dMin) boundaryFollow = false;
 
             // Find end point with smallest h, store as dLeave
             /*if(!localMap[42]) dLeave = Math.min(Math.max(Math.abs(checkX), Math.abs(checkY)) + Math.max(Math.abs(startEndX - checkX), Math.abs(startEndY - checkY)), dLeave);
@@ -344,7 +342,9 @@ public strictfp class RobotPlayer {
             if(!localMap[65]) dLeave = Math.min(Math.max(Math.abs(checkX), Math.abs(checkY)) + Math.max(Math.abs(startEndX - checkX), Math.abs(startEndY - checkY)), dLeave);
             if(!localMap[66]) dLeave = Math.min(Math.max(Math.abs(checkX), Math.abs(checkY)) + Math.max(Math.abs(startEndX - checkX), Math.abs(startEndY - checkY)), dLeave);
 
-            if(dLeave < dMin) *///boundaryFollow = false;
+            if(dLeave < dMin) {
+                boundaryFollow = false;
+            }*/
 
         } else {    // Pathfind
             boolean first = true;   // The optimalDirection should be based off the first movement towards endLoc, not the last. In testing they would jump in water sometimes because of this
@@ -453,7 +453,6 @@ public strictfp class RobotPlayer {
                                     int checkCost = Math.max(Math.abs(checkX), Math.abs(checkY)) + Math.max(Math.abs(endLoc.x - rcLoc.x - checkX), Math.abs(endLoc.y - rcLoc.y - checkY));
                                     //System.out.println("$$$: " + checkCost);
                                     if(checkCost <= optimalCost) {
-                                        if(checkCost == optimalCost && )
                                         optimalCost = checkCost;
                                         optimalDir = rcLoc.directionTo(new MapLocation(checkX + rcLoc.x, checkY + rcLoc.y));
                                     }
@@ -542,10 +541,21 @@ public strictfp class RobotPlayer {
 
             if(optimalDir == Direction.CENTER) {  // If optimal path costs more than the last optimal path, rc must be stuck
                 boundaryFollow = true;
-                System.out.println("boundaryFollow");
+                startLoc = rcLoc;
+                consecutiveTurns = 0;
+                moveDir = rcLoc.directionTo(endLoc);
+
+                moveDir = clockwise ? moveDir.rotateLeft().rotateLeft() : moveDir.rotateRight().rotateRight();    // Arbitrarily search clockwise, optimize this later
+                //clockwise = true;
+
+                startLoc = rcLoc;
+
+                dMin = optimalCost;
+                System.out.println("boundaryFollow: " + optimalCost);
             } //else dMin = optimalCost;
             System.out.println("DONE! " + optimalDir.toString());
             if(rc.canMove(optimalDir)) rc.move(optimalDir);       // Check if can move, just to avoid any possible errors that haven't been accounted for
+            startLoc = rcLoc.add(optimalDir);
         }
     }
 
