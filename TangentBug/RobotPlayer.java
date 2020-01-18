@@ -1,7 +1,11 @@
-package TangentBug;
+package MinerPathfinding;
+import org.apache.commons.lang3.ObjectUtils.Null;
+
 import battlecode.common.*;
 
 /**
+ * @author Austin Rognes
+ * 
  * Implemented the Tangent Bug from https://www.cs.cmu.edu/~motionplanning/lecture/Chap2-Bug-Alg_howie.pdf
  * UML diagram: http://4.bp.blogspot.com/-OxVSk7HwsnM/Umrb8H9bvrI/AAAAAAAAADY/7TceTdkxe_E/s1600/4.png
  * Moves towards target, if senses barrier, move towards shortest possible detour,
@@ -24,8 +28,10 @@ public strictfp class RobotPlayer {
     static int mapHeight;
 
     static Direction nextFrameSpawnDir; // Used by HQ
+    static int minersCreated;
 
-    static MapLocation soupLoc;  // Used by Miner
+    static MapLocation soupLoc;         // Used by Miner
+    static MapLocation soupDepositLoc;  // Location of lots of soup, away from HQ
 
     static boolean boundaryFollow;  // Used by pathfinding
     static Direction moveDir;
@@ -75,7 +81,7 @@ public strictfp class RobotPlayer {
 
         //System.out.println(rcType + " created. Found hq at  "  + hqLoc);
         while (true) {
-            step += 1;
+            step++;
             try {
                 switch (rcType) {
                     case HQ:                 runHQ();                break;
@@ -97,10 +103,6 @@ public strictfp class RobotPlayer {
                 e.printStackTrace();
             }
         }
-    }
-
-    static void callTest() {
-        return;
     }
 
     /**
@@ -145,16 +147,21 @@ public strictfp class RobotPlayer {
                             tryBuild(RobotType.MINER, Direction.SOUTH);
                         }
                     }
-                    rc.setIndicatorDot(new MapLocation(hqLoc.x + soupLoc.x, hqLoc.y + soupLoc.y), 255, 255, 255);
+                    //rc.setIndicatorDot(new MapLocation(hqLoc.x + soupLoc.x, hqLoc.y + soupLoc.y), 255, 255, 255);
                     break;
                 } 
                 else {    // Send miners NorthWest and SouthEast so they move diagonally and search 16 new tiles rather than 11
                     nextFrameSpawnDir = Direction.NORTHWEST;
                     tryBuild(RobotType.MINER, Direction.SOUTHEAST);
                 }
+                minersCreated = 1;
 
                 break;
-            case 2: if(nextFrameSpawnDir != null) tryBuild(RobotType.MINER, nextFrameSpawnDir); break;
+            case 2: if(nextFrameSpawnDir != null && tryBuild(RobotType.MINER, nextFrameSpawnDir)) minersCreated = 2; break;
+            default:
+                int teamSoup = rc.getTeamSoup();
+                if(/*minersCreated < 3 && */teamSoup >= 70 && tryBuildLoose(RobotType.MINER, nextFrameSpawnDir)) minersCreated++;
+                break;
         }
     }
 
@@ -182,13 +189,13 @@ public strictfp class RobotPlayer {
 
 
             if(rcState == 2) {                                            // Searching for Refinery?
-                rc.setIndicatorDot(hqLoc, 255, 255, 255);
+                //rc.setIndicatorDot(hqLoc, 255, 255, 255);
                 if(rcLoc.distanceSquaredTo(hqLoc) < 3) {                      // HQ is neighbor?
                     rc.depositSoup(rcLoc.directionTo(hqLoc), soupAmount);           // Deposit soup
                     if(rc.getSoupCarrying() < 1) {
-                        System.out.println("Deposited soup!");                      // DEBUG
+                        //System.out.println("Deposited soup!");                      // DEBUG
                         rcState = 0;                                                // Go collect more soup!
-                        soupLoc = null;   // Set soup to null unless an array of far away soup in 
+                        soupLoc = soupDepositLoc;   // Set soup to null unless an array of far away soup in 
                         boundaryFollow = false;
                     }
                 }
@@ -196,13 +203,13 @@ public strictfp class RobotPlayer {
             }
             else if(rcState < 2) {   // Searching for or mining soup?
 
-                boolean wasMining = (rcState == 1) ? true : false;  // SIMPLIFY
+                boolean wasMining = (rcState == 1) ? true : false;
                 rcState = 0;                                        // Searching for soup
                 for (Direction dir : Direction.allDirections())     // Try to mine soup everywhere
                     if(tryMine(dir)) rcState = 1;                   // Mined soup? Stop searching
                 
                 soupAmount = rc.getSoupCarrying();
-                if(rcState == 1) System.out.println("Slurped " + soupAmount + " slurps!"); // DEBUG
+                //if(rcState == 1) System.out.println("Slurped " + soupAmount + " slurps!"); // DEBUG
 
                 if(wasMining) {
                     if(soupAmount == RobotType.MINER.soupLimit) {
@@ -222,39 +229,43 @@ public strictfp class RobotPlayer {
 
                 if(soupLoc != null) pathfind(rcLoc, soupLoc);
 
-                if(rcState == 0 && soupLoc == null) {    // Still searching for soup and haven'd found any?
+                if(rcState == 0 && soupLoc == null) {    // Still searching for soup and haven't found any?
 
+                // TODO make soup search find center of mass of lots of soup! Save as soupDeposicLoc
                     int soupDist = 1000;
                     for(MapLocation thisSoupLoc : rc.senseNearbySoup()) {
                         if(soupLoc == null || rcLoc.distanceSquaredTo(thisSoupLoc) < soupDist) {   // If this soup is closer than closest soup
                             soupLoc = thisSoupLoc;                                             // This soup is closest soup
                             soupDist = rcLoc.distanceSquaredTo(soupLoc);                // Save distance to closest soup for multiple uses
-                            if(soupDist < 3) break;                                     // If radius squared is 2 or 1 then it is adjacent, so stop search
                         }
                     }
 
-                    if(soupLoc == null) {                                                              // Wander away from spawn in spiral or search for mirror
+                    if(soupLoc == null) {                                                              // Wander away from spawn in spiral or search of symmetry
                         
-                        
-                        MapLocation symmetricalLoc = new MapLocation(mapWidth - 1 - hqLoc.x, hqLoc.y);
-                        soupLoc = symmetricalLoc;
-                        int currDist = rcLoc.distanceSquaredTo(symmetricalLoc);
-
-                        currDist = rcLoc.distanceSquaredTo(symmetricalLoc);
-                        symmetricalLoc = new MapLocation(hqLoc.x, mapHeight - 1 - hqLoc.y);
-                        int checkDist = rcLoc.distanceSquaredTo(symmetricalLoc);
-                        if(checkDist < currDist) {
-                            currDist = checkDist;
+                        if(step < 30) {
+                            MapLocation symmetricalLoc = new MapLocation(mapWidth - 1 - hqLoc.x, hqLoc.y);
                             soupLoc = symmetricalLoc;
-                        }
+                            int currDist = rcLoc.distanceSquaredTo(symmetricalLoc);
 
-                        currDist = rcLoc.distanceSquaredTo(symmetricalLoc);
-                        symmetricalLoc = new MapLocation(mapWidth - 1 - hqLoc.x, mapHeight - 1 - hqLoc.y);    // TODO This should be rotational, not xy-flip
-                        checkDist = rcLoc.distanceSquaredTo(symmetricalLoc);
-                        if(checkDist < currDist) {
+                            symmetricalLoc = new MapLocation(hqLoc.x, mapHeight - 1 - hqLoc.y);
+                            int checkDist = rcLoc.distanceSquaredTo(symmetricalLoc);
+                            if(checkDist < currDist) {
+                                currDist = checkDist;
+                                soupLoc = symmetricalLoc;
+                            }
+
                             currDist = checkDist;
-                            soupLoc = symmetricalLoc;
+                            symmetricalLoc = new MapLocation(mapWidth - 1 - hqLoc.x, mapHeight - 1 - hqLoc.y);    // TODO This should be rotational, not xy-flip
+                            checkDist = rcLoc.distanceSquaredTo(symmetricalLoc);
+                            if(checkDist < currDist) soupLoc = symmetricalLoc;
                         }
+                        else {  // Throw a dart on the opposite side of the map
+                            soupLoc = new MapLocation(mapWidth - 1 - rcLoc.x, mapHeight - 1 - rcLoc.y);
+                            
+                        }
+                    }
+                    else if(hqLoc.distanceSquaredTo(soupLoc) > 4) {
+                        soupDepositLoc = soupLoc;
                     }
                 }
             }
@@ -264,7 +275,7 @@ public strictfp class RobotPlayer {
                 soupLoc = null;
             }
         }
-        if(soupLoc != null) rc.setIndicatorDot(soupLoc, 255, 255, 255);
+        //if(soupLoc != null) rc.setIndicatorDot(soupLoc, 255, 255, 255);
     }
 
     /**
@@ -291,7 +302,7 @@ public strictfp class RobotPlayer {
         if(boundaryFollow) {    // Follow boundary out of concave shape
             // Check
             //System.out.println(moveDir.toString());
-            rc.setIndicatorDot(rcLoc.add(moveDir), 255, 255, 0);
+            //rc.setIndicatorDot(rcLoc.add(moveDir), 255, 255, 0);
             
             //if(consecutiveTurns < 3) 
             moveDir = clockwise ? moveDir.rotateRight() : moveDir.rotateLeft();
@@ -306,9 +317,9 @@ public strictfp class RobotPlayer {
                 } else break;
             }
 
-            System.out.println(i);
+            //System.out.println(i);
 
-            rc.setIndicatorDot(rcLoc.add(moveDir), 0, 255, 0);
+            //rc.setIndicatorDot(rcLoc.add(moveDir), 0, 255, 0);
             if(i < 8 && rc.canMove(moveDir)) rc.move(moveDir);
 
             //System.out.println(">" + moveDir.toString());
@@ -325,39 +336,25 @@ public strictfp class RobotPlayer {
                 }
             } else consecutiveTurns = 0;
 
-            if(startLoc.x == checkLoc.x && startLoc.y == checkLoc.y) {
+            /*if(startLoc.x == checkLoc.x && startLoc.y == checkLoc.y) {
                 System.out.println("Full Trip! " + startLoc.toString());
                 moveDir = Direction.CENTER;
-            }
+            }*/
 
             if(Math.max(Math.abs(startEndX), Math.abs(startEndY)) < dMin) boundaryFollow = false;
-
-            // Find end point with smallest h, store as dLeave
-            /*if(!localMap[42]) dLeave = Math.min(Math.max(Math.abs(checkX), Math.abs(checkY)) + Math.max(Math.abs(startEndX - checkX), Math.abs(startEndY - checkY)), dLeave);
-            if(!localMap[43]) dLeave = Math.min(Math.max(Math.abs(checkX), Math.abs(checkY)) + Math.max(Math.abs(startEndX - checkX), Math.abs(startEndY - checkY)), dLeave);
-            if(!localMap[44]) dLeave = Math.min(Math.max(Math.abs(checkX), Math.abs(checkY)) + Math.max(Math.abs(startEndX - checkX), Math.abs(startEndY - checkY)), dLeave);
-            if(!localMap[53]) dLeave = Math.min(Math.max(Math.abs(checkX), Math.abs(checkY)) + Math.max(Math.abs(startEndX - checkX), Math.abs(startEndY - checkY)), dLeave);
-            if(!localMap[55]) dLeave = Math.min(Math.max(Math.abs(checkX), Math.abs(checkY)) + Math.max(Math.abs(startEndX - checkX), Math.abs(startEndY - checkY)), dLeave);
-            if(!localMap[64]) dLeave = Math.min(Math.max(Math.abs(checkX), Math.abs(checkY)) + Math.max(Math.abs(startEndX - checkX), Math.abs(startEndY - checkY)), dLeave);
-            if(!localMap[65]) dLeave = Math.min(Math.max(Math.abs(checkX), Math.abs(checkY)) + Math.max(Math.abs(startEndX - checkX), Math.abs(startEndY - checkY)), dLeave);
-            if(!localMap[66]) dLeave = Math.min(Math.max(Math.abs(checkX), Math.abs(checkY)) + Math.max(Math.abs(startEndX - checkX), Math.abs(startEndY - checkY)), dLeave);
-
-            if(dLeave < dMin) {
-                boundaryFollow = false;
-            }*/
 
         } else {    // Pathfind
             boolean first = true;   // The optimalDirection should be based off the first movement towards endLoc, not the last. In testing they would jump in water sometimes because of this
             while(checkX * checkX + checkY * checkY < rcRange) {
                 Direction d = rcLoc.directionTo(new MapLocation(endLoc.x - checkX, endLoc.y - checkY));
-                System.out.println("DIR " + d.toString() + ", " + endLoc.toString());
+                //System.out.println("DIR " + d.toString() + ", " + endLoc.toString());
                 checkX += d.dx;
                 checkY += d.dy;
                 MapLocation checkLoc = rcLoc.translate(checkX, checkY);
 
                 //if(checkX * checkX + checkY * checkY > rcRange) break;    // Ray made it out of range
 
-                rc.setIndicatorDot(checkLoc, 0, 255, 0);
+                //rc.setIndicatorDot(checkLoc, 0, 255, 0);
                 if(rcLoc.x + checkX == endLoc.x && rcLoc.y + checkY == endLoc.y) {  // Ray hit endLoc
                     optimalDir = rcLoc.directionTo(checkLoc);    // Simply point in direction of end, no cost calculation needed
                     break;
@@ -391,7 +388,7 @@ public strictfp class RobotPlayer {
 
                     int leftDone = 0;   // Finish search if ray castes to end of sensor range
                     int rightDone = 0;
-                    System.out.println("HIT!");
+                    //System.out.println("HIT!");
     
                     do {    // Check tiles in rays shot left, right, left, right ect.
 
@@ -406,7 +403,7 @@ public strictfp class RobotPlayer {
                             } else if(startEndX > 0) startEndY++;
                             else startEndY--;
 
-                            System.out.println("Left: " + leftDone + " (" + startEndX + ", " + startEndY + ")");
+                            //System.out.println("Left: " + leftDone + " (" + startEndX + ", " + startEndY + ")");
 
                             checkX = 0; // Vector used to change update
                             checkY = 0;
@@ -414,13 +411,13 @@ public strictfp class RobotPlayer {
                             //System.out.println("Left turn: " + startEndX + " " + startEndY);      // DEBUG
 
                             while(checkX * checkX + checkY * checkY < rcRange) {    // Check tiles in a ray until a barrier is hit, end is hit, or ray escapes range
-                                System.out.println("Left While: " + leftDone);
+                                //System.out.println("Left While: " + leftDone);
                                 d = rcLoc.directionTo(new MapLocation(rcLoc.x + startEndX, rcLoc.y + startEndY));
                                 checkX += d.dx;
                                 checkY += d.dy;
                                 checkLoc = rcLoc.translate(checkX, checkY);
 
-                                System.out.println(d.toString() + " - " + checkLoc.toString());
+                                //System.out.println(d.toString() + " - " + checkLoc.toString());
 
                                 checkingIndex = 54 + 11 * checkX - checkY; // Convert tile coordinates relative to start to checkingIndex
                                 if(checkingIndex > 92) {
@@ -431,14 +428,14 @@ public strictfp class RobotPlayer {
                                     else checkingIndex += 4;
                                 }
 
-                                rc.setIndicatorDot(checkLoc, 100, 0, 100);
+                                //rc.setIndicatorDot(checkLoc, 100, 0, 100);
 
                                 if(rc.canSenseLocation(checkLoc) ? (Math.abs(rc.senseElevation(checkLoc) - rcElev) > 3 || rc.senseFlooding(checkLoc) || rc.isLocationOccupied(checkLoc)) : false) {  // Hit something
-                                    System.out.println("Left While HIT: " + (Math.abs(rc.senseElevation(checkLoc) - rcElev)) + ", " + rc.senseFlooding(checkLoc) + ", " + rc.isLocationOccupied(checkLoc));
+                                    //System.out.println("Left While HIT: " + (Math.abs(rc.senseElevation(checkLoc) - rcElev)) + ", " + rc.senseFlooding(checkLoc) + ", " + rc.isLocationOccupied(checkLoc));
                                     if(checkX - d.dx + checkY - d.dy != 0) {
-                                        System.out.println("PLEASE" + (checkX - d.dx + checkY - d.dy));
+                                        //System.out.println("PLEASE" + (checkX - d.dx + checkY - d.dy));
                                         int checkCost = Math.max(Math.abs(checkX - d.dx), Math.abs(checkY - d.dy)) + Math.max(Math.abs(endLoc.x - rcLoc.x - (checkX - d.dx)), Math.abs(endLoc.y - rcLoc.y - (checkY - d.dy)));
-                                        System.out.println("$$: " + checkCost);
+                                        //System.out.println("$$: " + checkCost);
                                         if(checkCost <= optimalCost) {
                                             optimalCost = checkCost;
                                             optimalDir = rcLoc.directionTo(new MapLocation(checkX - d.dx + rcLoc.x, checkY - d.dy + rcLoc.y));
@@ -449,7 +446,7 @@ public strictfp class RobotPlayer {
                                 }
 
                                 if(checkX == startEndX && checkY == startEndY) {    // Found offset end
-                                    System.out.println("Left While END!: " + leftDone);
+                                    //System.out.println("Left While END!: " + leftDone);
                                     int checkCost = Math.max(Math.abs(checkX), Math.abs(checkY)) + Math.max(Math.abs(endLoc.x - rcLoc.x - checkX), Math.abs(endLoc.y - rcLoc.y - checkY));
                                     //System.out.println("$$$: " + checkCost);
                                     if(checkCost <= optimalCost) {
@@ -457,7 +454,6 @@ public strictfp class RobotPlayer {
                                         optimalDir = rcLoc.directionTo(new MapLocation(checkX + rcLoc.x, checkY + rcLoc.y));
                                     }
                                     leftDone = 10;
-                                    //rightDone = 10;
                                     break;
                                 }
                                 //System.out.println("SE: (" + startEndX + ", " + startEndY + ") | (" + checkX + ", " + checkY + ")" + "Atan: " + Math.atan2(startEndY - endLoc.y, startEndX - endLoc.x));
@@ -466,7 +462,7 @@ public strictfp class RobotPlayer {
                         }
                     
                         if(rightDone < 6) { 
-                            System.out.println("Right: " + rightDone);
+                            //System.out.println("Right: " + rightDone);
                             if(startEndYRight > 0) {     // Vector from start to open space to the RIGHT of collided tile
                                 if(startEndXRight > 0) startEndYRight--;
                                 else startEndXRight++;
@@ -480,13 +476,13 @@ public strictfp class RobotPlayer {
                             checkY = 0;
 
                             while(checkX * checkX + checkY * checkY < rcRange) {
-                                System.out.println("Right while: " + rightDone);
+                                //System.out.println("Right while: " + rightDone);
                                 d = rcLoc.directionTo(new MapLocation(rcLoc.x + startEndXRight, rcLoc.y + startEndYRight));
                                 checkX += d.dx;
                                 checkY += d.dy;
                                 checkLoc = rcLoc.translate(checkX, checkY);
 
-                                System.out.println(d.toString() + " - " + checkLoc.toString());
+                                //System.out.println(d.toString() + " - " + checkLoc.toString());
 
                                 checkingIndex = 54 + 11 * checkX - checkY; // Convert tile coordinates relative to start to checkingIndex
                                 if(checkingIndex > 92) {
@@ -497,11 +493,11 @@ public strictfp class RobotPlayer {
                                     else checkingIndex += 4;
                                 }
 
-                                rc.setIndicatorDot(checkLoc, 255, 0, 255);
+                                //rc.setIndicatorDot(checkLoc, 255, 0, 255);
                                 //else rc.setIndicatorDot(new MapLocation(rcLoc.x + checkX, rcLoc.y + checkY), 255 - 64 * j, 0, 0);
 
                                 if(rc.canSenseLocation(checkLoc) ? (Math.abs(rc.senseElevation(checkLoc) - rcElev) > 3 || rc.senseFlooding(checkLoc) || rc.isLocationOccupied(checkLoc)) : false) {  // Hit something
-                                    System.out.println("Right while HIT: " + rightDone);
+                                    //System.out.println("Right while HIT: " + rightDone);
                                     if(checkX - d.dx + checkY - d.dy != 0) {
                                         int checkCost = Math.max(Math.abs(checkX - d.dx), Math.abs(checkY - d.dy)) + Math.max(Math.abs(endLoc.x - rcLoc.x - (checkX - d.dx)), Math.abs(endLoc.y - rcLoc.y - (checkY - d.dy)));
                                         //System.out.println("$$: " + checkCost);
@@ -514,14 +510,13 @@ public strictfp class RobotPlayer {
                                 }
 
                                 if(checkX == startEndXRight && checkY == startEndYRight) {
-                                    System.out.println("Right while END!: " + rightDone);
+                                    //System.out.println("Right while END!: " + rightDone);
                                     int checkCost = Math.max(Math.abs(checkX), Math.abs(checkY)) + Math.max(Math.abs(endLoc.x - rcLoc.x - checkX), Math.abs(endLoc.y - rcLoc.y - checkY));
                                     //System.out.println("$$$: " + checkCost);
                                     if(checkCost <= optimalCost) {
                                         optimalCost = checkCost;
                                         optimalDir = rcLoc.directionTo(new MapLocation(checkX + rcLoc.x, checkY + rcLoc.y));
                                     }
-                                    //leftDone = 10;
                                     rightDone = 10;
                                     break;
                                 }
@@ -551,9 +546,9 @@ public strictfp class RobotPlayer {
                 startLoc = rcLoc;
 
                 dMin = optimalCost;
-                System.out.println("boundaryFollow: " + optimalCost);
+                //System.out.println("boundaryFollow: " + optimalCost);
             } //else dMin = optimalCost;
-            System.out.println("DONE! " + optimalDir.toString());
+            //System.out.println("DONE! " + optimalDir.toString());
             if(rc.canMove(optimalDir)) rc.move(optimalDir);       // Check if can move, just to avoid any possible errors that haven't been accounted for
             startLoc = rcLoc.add(optimalDir);
         }
@@ -605,6 +600,69 @@ public strictfp class RobotPlayer {
             rc.buildRobot(type, dir);
             return true;
         } else return false;
+    }
+
+    /**
+     * Attempt to build a given robot in any direction with a prioritized direction
+     * 
+     * @param type The type of robot to build
+     * @param dir    The intended direction of movement
+     * @return  true if a move was performed
+     * @throws GameActionException
+     */
+    static boolean tryBuildLoose(RobotType type, Direction dir) throws GameActionException {
+        if(!rc.isReady()) return false;
+
+        if(rc.canBuildRobot(type, dir)) {   // Try to build robot at prioritized direction
+            rc.buildRobot(type, dir);
+            return true;
+        }
+
+        Direction leftRotate = dir.rotateLeft();
+        dir = dir.rotateRight();
+
+        if(rc.canBuildRobot(type, leftRotate)) {    // Try 1 CC
+            rc.buildRobot(type, leftRotate);
+            return true;
+        }
+
+        if(rc.canBuildRobot(type, dir)) {           // Try 1 C
+            rc.buildRobot(type, dir);
+            return true;
+        }
+
+        leftRotate = dir.rotateLeft();
+        dir = dir.rotateRight();
+
+        if(rc.canBuildRobot(type, leftRotate)) {    // Try 2 CC
+            rc.buildRobot(type, leftRotate);
+            return true;
+        }
+        if(rc.canBuildRobot(type, dir)) {           // Try 2 c
+            rc.buildRobot(type, dir);
+            return true;
+        }
+
+        leftRotate = dir.rotateLeft();
+        dir = dir.rotateRight();
+
+        if(rc.canBuildRobot(type, leftRotate)) {    // Try 3 CC
+            rc.buildRobot(type, leftRotate);
+            return true;
+        }
+        if(rc.canBuildRobot(type, dir)) {           // Try 3 c
+            rc.buildRobot(type, dir);
+            return true;
+        }
+
+        dir = dir.rotateRight();
+
+        if(rc.canBuildRobot(type, dir)) {    // Try 4 C / CC
+            rc.buildRobot(type, dir);
+            return true;
+        }
+
+        return false;
     }
 
     /**
