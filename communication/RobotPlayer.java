@@ -99,6 +99,13 @@ public strictfp class RobotPlayer {
     			tryBuild(RobotType.MINER, Direction.SOUTH);
     		}
     	}
+        RobotInfo [] info = rc.senseNearbyRobots();
+    	for(int i = 0; i < info.length; i++) {
+    		int id = info[i].ID;
+        	if(rc.canShootUnit(id) && info[i].getTeam() != rc.getTeam()) {
+        		rc.shootUnit(id);
+        	}
+    	}
     }
 
     static void runMiner() throws GameActionException {
@@ -189,7 +196,13 @@ public strictfp class RobotPlayer {
     }
 
     static void runNetGun() throws GameActionException {
-
+        RobotInfo [] info = rc.senseNearbyRobots();
+    	for(int i = 0; i < info.length; i++) {
+    		int id = info[i].ID;
+        	if(rc.canShootUnit(id) && info[i].getTeam() != rc.getTeam()) {
+        		rc.shootUnit(id);
+        	}
+    	}
     }
 
     /**
