@@ -32,6 +32,7 @@ public strictfp class RobotPlayer {
 
     static MapLocation soupLoc;         // Used by Miner
     static MapLocation soupDepositLoc;  // Location of lots of soup, away from HQ
+    static int rcTask = 0;
 
     static boolean boundaryFollow;  // Used by pathfinding
     static Direction moveDir;
@@ -58,8 +59,17 @@ public strictfp class RobotPlayer {
         mapWidth = rc.getMapWidth();
         mapHeight = rc.getMapHeight();
         boundaryFollow = false;
+        minersCreated = 0;
 
         // Find and save hq location
+        RobotInfo[] nearbyRobots = rc.senseNearbyRobots(rc.getCurrentSensorRadiusSquared(), rcTeam);
+        for (int i = 0; i < nearbyRobots.length; i++) {         // HQ location must be a neighbor
+            if (nearbyRobots[i].getType() == RobotType.HQ) {
+                hqLoc = nearbyRobots[i].getLocation();
+                break;
+            }
+        }
+        //Direction hqToCenter;
         switch(rcType) {
             case HQ: 
                 hqLoc = rc.getLocation();
@@ -67,15 +77,51 @@ public strictfp class RobotPlayer {
 
                 break;
             case MINER:
-                RobotInfo[] nearbyRobots = rc.senseNearbyRobots(2, rcTeam);
-                for (int i = 0; i < nearbyRobots.length; i++) {         // HQ location must be a neighbor
-                    if (nearbyRobots[i].getType() == RobotType.HQ) {
-                        hqLoc = nearbyRobots[i].getLocation();
-                        soupLoc = null;
-                        clockwise = (rc.getLocation().x % 2 == 0) ? true : false;   // Randomize somewhata
-                        break;
+                soupLoc = null;
+                MapLocation rcLoc = rc.getLocation();
+                clockwise = ((rcLoc.x + rcLoc.y) % 2 == 0) ? true : false;   // Randomize somewhat
+
+                if(rc.getTeamSoup() == 62) rcTask = 1;
+                break;
+            case LANDSCAPER:
+                soupLoc = null;
+                if(hqLoc != null) {   // Search for open locations next to HQ
+                    Direction hqToCenter = hqLoc.directionTo(new MapLocation(mapWidth / 2, mapHeight / 2));
+
+                    MapLocation checkLoc = hqLoc.add(hqToCenter.rotateLeft().rotateLeft());
+                    if(rc.canSenseLocation(checkLoc) && !rc.isLocationOccupied(checkLoc)) soupLoc = checkLoc;   // LL
+                    else {
+                        checkLoc = hqLoc.add(hqToCenter.rotateRight().rotateRight());
+                        if(rc.canSenseLocation(checkLoc) && !rc.isLocationOccupied(checkLoc)) soupLoc = checkLoc;   // RR
+                        else {
+                            checkLoc = hqLoc.add(hqToCenter.rotateLeft());
+                            if(rc.canSenseLocation(checkLoc) && !rc.isLocationOccupied(checkLoc)) soupLoc = checkLoc;   // L
+                            else {
+                                checkLoc = hqLoc.add(hqToCenter.rotateRight());
+                                if(rc.canSenseLocation(checkLoc) && !rc.isLocationOccupied(checkLoc)) soupLoc = checkLoc;   // R
+                                else {
+                                    checkLoc = hqLoc.add(hqToCenter);
+                                    if(rc.canSenseLocation(checkLoc) && !rc.isLocationOccupied(checkLoc)) soupLoc = checkLoc;   // Center
+                                    else {
+                                        checkLoc = hqLoc.add(hqToCenter.opposite().rotateRight());
+                                        if(rc.canSenseLocation(checkLoc) && !rc.isLocationOccupied(checkLoc)) soupLoc = checkLoc;   // LLL
+                                        else {
+                                            checkLoc = hqLoc.add(hqToCenter.opposite().rotateLeft());
+                                            if(rc.canSenseLocation(checkLoc) && !rc.isLocationOccupied(checkLoc)) soupLoc = checkLoc;   // RRR
+                                            else {
+                                                checkLoc = hqLoc.add(hqToCenter.opposite());
+                                                if(rc.canSenseLocation(checkLoc) && !rc.isLocationOccupied(checkLoc)) soupLoc = checkLoc;   // Back
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
+                break;
+            default:
+                
                 break;
         }
 
@@ -113,7 +159,7 @@ public strictfp class RobotPlayer {
             case 1:
                 
                 // Top priority: Find closest soup. Soup location relative to HQ position
-                MapLocation soupLoc = null;
+                //MapLocation soupLoc = null;
 
                 int soupDist = 1000;
                 for(MapLocation thisSoupLoc : rc.senseNearbySoup()) {
@@ -133,18 +179,18 @@ public strictfp class RobotPlayer {
                     if(soupLoc.y > 0) {
                         if(soupLoc.y > soupLoc.x) {
                             nextFrameSpawnDir = Direction.NORTHWEST;
-                            tryBuild(RobotType.MINER, Direction.NORTH);
+                            tryBuildLoose(RobotType.MINER, Direction.NORTH);
                         } else {
                             nextFrameSpawnDir = Direction.NORTHEAST;
-                            tryBuild(RobotType.MINER, Direction.EAST);
+                            tryBuildLoose(RobotType.MINER, Direction.EAST);
                         }
                     } else {
                         if(soupLoc.y >= soupLoc.x) {
                             nextFrameSpawnDir = Direction.SOUTHWEST;
-                            tryBuild(RobotType.MINER, Direction.WEST);
+                            tryBuildLoose(RobotType.MINER, Direction.WEST);
                         } else {
                             nextFrameSpawnDir = Direction.SOUTHEAST;
-                            tryBuild(RobotType.MINER, Direction.SOUTH);
+                            tryBuildLoose(RobotType.MINER, Direction.SOUTH);
                         }
                     }
                     //rc.setIndicatorDot(new MapLocation(hqLoc.x + soupLoc.x, hqLoc.y + soupLoc.y), 255, 255, 255);
@@ -152,15 +198,15 @@ public strictfp class RobotPlayer {
                 } 
                 else {    // Send miners NorthWest and SouthEast so they move diagonally and search 16 new tiles rather than 11
                     nextFrameSpawnDir = Direction.NORTHWEST;
-                    tryBuild(RobotType.MINER, Direction.SOUTHEAST);
+                    tryBuildLoose(RobotType.MINER, Direction.SOUTHEAST);
                 }
                 minersCreated = 1;
 
                 break;
-            case 2: if(nextFrameSpawnDir != null && tryBuild(RobotType.MINER, nextFrameSpawnDir)) minersCreated = 2; break;
+            case 2: if(nextFrameSpawnDir != null && tryBuildLoose(RobotType.MINER, nextFrameSpawnDir)) minersCreated = 2; break;
             default:
                 int teamSoup = rc.getTeamSoup();
-                if(/*minersCreated < 3 && */teamSoup >= 70 && tryBuildLoose(RobotType.MINER, nextFrameSpawnDir)) minersCreated++;
+                if(minersCreated < 3 && teamSoup >= 70 && tryBuildLoose(RobotType.MINER, nextFrameSpawnDir)) minersCreated++;
                 break;
         }
     }
@@ -177,105 +223,131 @@ public strictfp class RobotPlayer {
      *      zig-zag away and confuse enemy drones
      *      find and collect enemy soup before their miners can,
      *      determine context to build different buildings
+     * 
+     *      early game:
+     *          when soup >= 150, check if hq has design school rad^2 > 8 nearby, if not, build one
      */
     static void runMiner() throws GameActionException {
         int rcRange = rc.getCurrentSensorRadiusSquared();
         MapLocation rcLoc = rc.getLocation();
         //System.out.println("CD: " + rc.getCooldownTurns());
+
+
+        int soupDist = 1000;
+        for(MapLocation thisSoupLoc : rc.senseNearbySoup()) {
+            if(soupLoc == null || rcLoc.distanceSquaredTo(thisSoupLoc) < soupDist) {   // If this soup is closer than closest soup
+                soupLoc = thisSoupLoc;                                             // This soup is closest soup
+                soupDist = rcLoc.distanceSquaredTo(soupLoc);                // Save distance to closest soup for multiple uses
+            }
+        }
+
+        if(soupLoc != null && hqLoc.distanceSquaredTo(soupLoc) > 4) soupDepositLoc = soupLoc;
+
+        
         
         if(rc.isReady()) {  // Cooldown < 1
             int soupAmount = rc.getSoupCarrying();
             if(soupLoc != null && rcLoc.distanceSquaredTo(soupLoc) < rcRange && rc.senseSoup(soupLoc) < 1) soupLoc = null;    // Where did the soup go?
+            
+            if(rcTask == 1 && rc.getTeamSoup() >= 150) {
 
 
-            if(rcState == 2) {                                            // Searching for Refinery?
-                //rc.setIndicatorDot(hqLoc, 255, 255, 255);
-                if(rcLoc.distanceSquaredTo(hqLoc) < 3) {                      // HQ is neighbor?
-                    rc.depositSoup(rcLoc.directionTo(hqLoc), soupAmount);           // Deposit soup
-                    if(rc.getSoupCarrying() < 1) {
-                        //System.out.println("Deposited soup!");                      // DEBUG
-                        rcState = 0;                                                // Go collect more soup!
-                        soupLoc = soupDepositLoc;   // Set soup to null unless an array of far away soup in 
-                        boundaryFollow = false;
-                    }
-                }
-                else pathfind(rcLoc, hqLoc/*, localMap*/);                      // HQ not neighbor? Keep searching for Refinery
-            }
-            else if(rcState < 2) {   // Searching for or mining soup?
-
-                boolean wasMining = (rcState == 1) ? true : false;
-                rcState = 0;                                        // Searching for soup
-                for (Direction dir : Direction.allDirections())     // Try to mine soup everywhere
-                    if(tryMine(dir)) rcState = 1;                   // Mined soup? Stop searching
-                
-                soupAmount = rc.getSoupCarrying();
-                //if(rcState == 1) System.out.println("Slurped " + soupAmount + " slurps!"); // DEBUG
-
-                if(wasMining) {
-                    if(soupAmount == RobotType.MINER.soupLimit) {
-                        soupLoc = hqLoc;
-                        rcState = 2;   // Full? Go search for Refinery
-                        if(boundaryFollow) {    // If had to bug in, reverse bug out
-                            clockwise = !clockwise;
-                            moveDir = moveDir.opposite();
-                            consecutiveTurns =0;
-                            startLoc = rcLoc;
-
-                            dMin = Math.max(Math.abs(hqLoc.x - rcLoc.x), Math.abs(hqLoc.y - rcLoc.y));
+                Direction hqToCenter = hqLoc.directionTo(new MapLocation(mapWidth / 2, mapHeight / 2));
+                if(hqLoc.x < 3 || hqLoc.y < 3 || hqLoc.x > mapWidth - 4 || hqLoc.y > mapHeight - 4) hqToCenter = hqToCenter.opposite();
+                int distToHQ = rcLoc.distanceSquaredTo(hqLoc);
+                if((distToHQ > 3 && distToHQ < 16 || distToHQ == 18) && rcLoc.directionTo(hqLoc) == hqToCenter) {   // Try to create building
+                    for(Direction d : Direction.allDirections()) {
+                        distToHQ = rcLoc.add(d).distanceSquaredTo(hqLoc);
+                        if(distToHQ > 8 && distToHQ < 16 && tryBuild(RobotType.DESIGN_SCHOOL, d)) {
+                            rcTask = 0;
+                            break;
                         }
                     }
-                    else soupLoc = null;   // If no more soup, but not full, restart search!
                 }
+                pathfind(rcLoc, hqLoc.translate(hqToCenter.dx * -3, hqToCenter.dy * -3)); 
 
-                if(soupLoc != null) pathfind(rcLoc, soupLoc);
 
-                if(rcState == 0 && soupLoc == null) {    // Still searching for soup and haven't found any?
+            } else {
 
-                // TODO make soup search find center of mass of lots of soup! Save as soupDeposicLoc
-                    int soupDist = 1000;
-                    for(MapLocation thisSoupLoc : rc.senseNearbySoup()) {
-                        if(soupLoc == null || rcLoc.distanceSquaredTo(thisSoupLoc) < soupDist) {   // If this soup is closer than closest soup
-                            soupLoc = thisSoupLoc;                                             // This soup is closest soup
-                            soupDist = rcLoc.distanceSquaredTo(soupLoc);                // Save distance to closest soup for multiple uses
+
+                if(rcState == 2) {                                            // Searching for Refinery?
+                    //rc.setIndicatorDot(hqLoc, 255, 255, 255);
+                    if(rcLoc.distanceSquaredTo(hqLoc) < 3) {                      // HQ is neighbor?
+                        rc.depositSoup(rcLoc.directionTo(hqLoc), soupAmount);           // Deposit soup
+                        if(rc.getSoupCarrying() < 1) {
+                            //System.out.println("Deposited soup!");                      // DEBUG
+                            rcState = 0;                                                // Go collect more soup!
+                            soupLoc = soupDepositLoc;   // Set soup to null unless an array of far away soup in 
+                            boundaryFollow = false;
                         }
                     }
+                    else pathfind(rcLoc, hqLoc);                      // HQ not neighbor? Keep searching for Refinery
+                }
+                else if(rcState < 2) {   // Searching for or mining soup?
 
-                    if(soupLoc == null) {                                                              // Wander away from spawn in spiral or search of symmetry
-                        
-                        if(step < 30) {
-                            MapLocation symmetricalLoc = new MapLocation(mapWidth - 1 - hqLoc.x, hqLoc.y);
-                            soupLoc = symmetricalLoc;
-                            int currDist = rcLoc.distanceSquaredTo(symmetricalLoc);
+                    boolean wasMining = (rcState == 1) ? true : false;
+                    rcState = 0;                                        // Searching for soup
+                    for (Direction dir : Direction.allDirections())     // Try to mine soup everywhere
+                        if(tryMine(dir)) rcState = 1;                   // Mined soup? Stop searching
+                    
+                    soupAmount = rc.getSoupCarrying();
+                    //if(rcState == 1) System.out.println("Slurped " + soupAmount + " slurps!"); // DEBUG
 
-                            symmetricalLoc = new MapLocation(hqLoc.x, mapHeight - 1 - hqLoc.y);
-                            int checkDist = rcLoc.distanceSquaredTo(symmetricalLoc);
-                            if(checkDist < currDist) {
-                                currDist = checkDist;
-                                soupLoc = symmetricalLoc;
+                    if(wasMining) {
+                        if(soupAmount == RobotType.MINER.soupLimit) {
+                            soupLoc = hqLoc;
+                            rcState = 2;   // Full? Go search for Refinery
+                            if(boundaryFollow) {    // If had to bug in, reverse bug out
+                                clockwise = !clockwise;
+                                moveDir = moveDir.opposite();
+                                consecutiveTurns =0;
+                                startLoc = rcLoc;
+
+                                dMin = Math.max(Math.abs(hqLoc.x - rcLoc.x), Math.abs(hqLoc.y - rcLoc.y));
                             }
+                        }
+                        else soupLoc = null;   // If no more soup, but not full, restart search!
+                    }
 
-                            currDist = checkDist;
-                            symmetricalLoc = new MapLocation(mapWidth - 1 - hqLoc.x, mapHeight - 1 - hqLoc.y);    // TODO This should be rotational, not xy-flip
-                            checkDist = rcLoc.distanceSquaredTo(symmetricalLoc);
-                            if(checkDist < currDist) soupLoc = symmetricalLoc;
-                        }
-                        else {  // Throw a dart on the opposite side of the map
-                            soupLoc = new MapLocation(mapWidth - 1 - rcLoc.x, mapHeight - 1 - rcLoc.y);
-                            
-                        }
+                    if(soupLoc != null) pathfind(rcLoc, soupLoc);
+
+                    if(rcState == 0 && soupLoc == null) {    // Still searching for soup and haven't found any?
+                            if(step < 30) {
+                                MapLocation symmetricalLoc = new MapLocation(mapWidth - 1 - hqLoc.x, hqLoc.y);
+                                soupLoc = symmetricalLoc;
+                                int currDist = rcLoc.distanceSquaredTo(symmetricalLoc);
+
+                                symmetricalLoc = new MapLocation(hqLoc.x, mapHeight - 1 - hqLoc.y);
+                                int checkDist = rcLoc.distanceSquaredTo(symmetricalLoc);
+                                if(checkDist < currDist) {
+                                    currDist = checkDist;
+                                    soupLoc = symmetricalLoc;
+                                }
+
+                                currDist = checkDist;
+                                symmetricalLoc = new MapLocation(mapWidth - 1 - hqLoc.x, mapHeight - 1 - hqLoc.y);    // TODO This should be rotational, not xy-flip
+                                checkDist = rcLoc.distanceSquaredTo(symmetricalLoc);
+                                if(checkDist < currDist) soupLoc = symmetricalLoc;
+                            }
+                            else {  // Throw a dart on the opposite side of the map
+                                soupLoc = new MapLocation(mapWidth - 1 - rcLoc.x, mapHeight - 1 - rcLoc.y);
+                                
+                            }
+                        //}
+                        //else if(hqLoc.distanceSquaredTo(soupLoc) > 4) {
+                        //    soupDepositLoc = soupLoc;
+                        //}
                     }
-                    else if(hqLoc.distanceSquaredTo(soupLoc) > 4) {
-                        soupDepositLoc = soupLoc;
-                    }
+
                 }
-            }
 
-            if(soupAmount < 1 && rcState != 0) {  // Not carrying soup and not searching for soup? Search for soup!
-                rcState = 0;
-                soupLoc = null;
+                if(soupAmount < 1 && (rcState == 1 || rcState == 2)) {  // Not carrying soup and not searching for soup? Search for soup!
+                    rcState = 0;
+                    soupLoc = null;
+                }
             }
         }
-        //if(soupLoc != null) rc.setIndicatorDot(soupLoc, 255, 255, 255);
+            if(soupLoc != null) rc.setIndicatorDot(soupLoc, 255, 255, 255);
     }
 
     /**
@@ -567,7 +639,11 @@ public strictfp class RobotPlayer {
     }
 
     static void runDesignSchool() throws GameActionException {
-
+        if(rc.getTeamSoup() >= 150 && minersCreated < 2) {
+            if(tryBuild(RobotType.LANDSCAPER, rc.getLocation().directionTo(new MapLocation(mapWidth/2, mapHeight/2)).rotateRight().rotateRight())) minersCreated++;
+            else if(tryBuild(RobotType.LANDSCAPER, rc.getLocation().directionTo(new MapLocation(mapWidth/2, mapHeight/2)).rotateLeft().rotateLeft())) minersCreated++;
+            System.out.println(minersCreated);
+        }
     }
 
     static void runFulfillmentCenter() throws GameActionException {
@@ -575,8 +651,115 @@ public strictfp class RobotPlayer {
             if(tryBuild(RobotType.DELIVERY_DRONE, dir)) break;
     }
 
+    /**
+     * Defensive strategy, turtle HQ
+     * 
+     */
     static void runLandscaper() throws GameActionException {
 
+        MapLocation rcLoc = rc.getLocation();   // Bury neighbor enemy buildings
+        if(rc.getDirtCarrying() > 0) {
+            RobotInfo[] nearbyEnemies = rc.senseNearbyRobots(rc.getCurrentSensorRadiusSquared(), rcTeam.opponent());
+            MapLocation enemyLoc;
+            for(RobotInfo enemy : nearbyEnemies) {
+                switch(enemy.getType()) {
+                    case DESIGN_SCHOOL: FULFILLMENT_CENTER: NET_GUN: REFINERY: VAPORATOR:
+                        enemyLoc = enemy.getLocation();
+                        if(rcLoc.distanceSquaredTo(enemyLoc) < 3) {
+                            Direction rcToEnemy = rcLoc.directionTo(enemyLoc);
+                            if(rc.canDepositDirt(rcToEnemy)) rc.depositDirt(rcToEnemy);
+                        } else pathfind(rcLoc, enemyLoc);
+                        break;
+                    default:
+                        break;
+                }
+            }
+        }
+
+        if(hqLoc == null) {     // If didn't find HQ at start due to pollution, find it!
+            RobotInfo[] nearbyRobots = rc.senseNearbyRobots(rc.getCurrentSensorRadiusSquared(), rcTeam);
+            for (int i = 0; i < nearbyRobots.length; i++) {         // HQ location must be a neighbor
+                if (nearbyRobots[i].getType() == RobotType.HQ) {
+                    hqLoc = nearbyRobots[i].getLocation();
+                    break;
+                }
+            }
+        }
+
+
+        if(hqLoc != null) {
+            if(soupLoc == null || (soupLoc != null && soupLoc.x != rcLoc.x && soupLoc.y != rcLoc.y) /* || (not in soupLoc && soupLoc taken) */) {   // If didn't find open location next to HQ at start, or did and isn't in position yet
+                int rcElev = rc.senseElevation(rcLoc);
+                Direction hqToCenter = hqLoc.directionTo(new MapLocation(mapWidth / 2, mapHeight / 2));     // Search for open locations next to HQ by priority
+                MapLocation checkLoc = hqLoc.add(hqToCenter.rotateLeft().rotateLeft());
+                if(rc.canSenseLocation(checkLoc) && !rc.isLocationOccupied(checkLoc) && Math.abs(rc.senseElevation(checkLoc) - rcElev) < 3) soupLoc = checkLoc;   // LL
+                else {
+                    checkLoc = hqLoc.add(hqToCenter.rotateRight().rotateRight());
+                    if(rc.canSenseLocation(checkLoc) && !rc.isLocationOccupied(checkLoc) && Math.abs(rc.senseElevation(checkLoc) - rcElev) < 3) soupLoc = checkLoc;   // RR
+                    else {
+                        checkLoc = hqLoc.add(hqToCenter.rotateLeft());
+                        if(rc.canSenseLocation(checkLoc) && !rc.isLocationOccupied(checkLoc) && Math.abs(rc.senseElevation(checkLoc) - rcElev) < 3) soupLoc = checkLoc;   // L
+                        else {
+                            checkLoc = hqLoc.add(hqToCenter.rotateRight());
+                            if(rc.canSenseLocation(checkLoc) && !rc.isLocationOccupied(checkLoc) && Math.abs(rc.senseElevation(checkLoc) - rcElev) < 3) soupLoc = checkLoc;   // R
+                            else {
+                                checkLoc = hqLoc.add(hqToCenter);
+                                if(rc.canSenseLocation(checkLoc) && !rc.isLocationOccupied(checkLoc) && Math.abs(rc.senseElevation(checkLoc) - rcElev) < 3) soupLoc = checkLoc;   // Center
+                                else {
+                                    checkLoc = hqLoc.add(hqToCenter.opposite().rotateRight());
+                                    if(rc.canSenseLocation(checkLoc) && !rc.isLocationOccupied(checkLoc) && Math.abs(rc.senseElevation(checkLoc) - rcElev) < 3) soupLoc = checkLoc;   // LLL
+                                    else {
+                                        checkLoc = hqLoc.add(hqToCenter.opposite().rotateLeft());
+                                        if(rc.canSenseLocation(checkLoc) && !rc.isLocationOccupied(checkLoc) && Math.abs(rc.senseElevation(checkLoc) - rcElev) < 3) soupLoc = checkLoc;   // RRR
+                                        else {
+                                            checkLoc = hqLoc.add(hqToCenter.opposite());
+                                            if(rc.canSenseLocation(checkLoc) && !rc.isLocationOccupied(checkLoc) && Math.abs(rc.senseElevation(checkLoc) - rcElev) < 3) soupLoc = checkLoc;   // Back
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            System.out.println(soupLoc);
+            rc.setIndicatorDot(soupLoc, 255, 0, 0);
+
+            int distToHQ = rcLoc.distanceSquaredTo(hqLoc);
+            
+            if(rcLoc.x == soupLoc.x && rcLoc.y == soupLoc.y) {
+                if(rc.isReady()) {
+                    Direction checkHQ = rcLoc.directionTo(hqLoc);
+                    if(rc.canDigDirt(checkHQ)) rc.digDirt(checkHQ);
+                    else {
+                        
+                        if(rc.getDirtCarrying() > 0) rc.depositDirt(Direction.CENTER);
+                        else {  // Find diggable site
+                            for(Direction d : Direction.allDirections()) {
+                                distToHQ = rcLoc.add(d).distanceSquaredTo(hqLoc);
+                                if(distToHQ == 4 && rc.canDigDirt(d) && rc.senseRobotAtLocation(rcLoc.add(d)) == null) rc.digDirt(d);
+                            }
+                        }
+                    }
+                }
+            } else {    // Go to assigned location
+                if(rcLoc.distanceSquaredTo(soupLoc) < 3 && rc.isReady()) {  // Can't move to assigned location due to elevation difference
+                    int deltaDirt = rc.senseElevation(rcLoc) - rc.senseElevation(soupLoc);  // Difference in dirt from current location to assigned location
+                    Direction dirToAssigned = rcLoc.directionTo(soupLoc);
+
+                    if(deltaDirt >= 3) { // Fill rcLoc from assignedLoc
+                        if(rc.canDigDirt(Direction.CENTER)) rc.digDirt(Direction.CENTER);
+                        else if(rc.getDirtCarrying() > 0) rc.depositDirt(dirToAssigned);
+                        
+                    } else if(deltaDirt <= -3) { // Fill rcLoc from assigned location
+                        if(rc.canDigDirt(dirToAssigned)) rc.digDirt(dirToAssigned);
+                        else if(rc.getDirtCarrying() > 0) rc.depositDirt(Direction.CENTER);
+                    }
+                }
+
+                pathfind(rcLoc, soupLoc);
+            }
+        }
     }
 
     static void runDeliveryDrone() throws GameActionException {
@@ -617,6 +800,7 @@ public strictfp class RobotPlayer {
             rc.buildRobot(type, dir);
             return true;
         }
+        
 
         Direction leftRotate = dir.rotateLeft();
         dir = dir.rotateRight();
@@ -631,7 +815,7 @@ public strictfp class RobotPlayer {
             return true;
         }
 
-        leftRotate = dir.rotateLeft();
+        leftRotate = leftRotate.rotateLeft();
         dir = dir.rotateRight();
 
         if(rc.canBuildRobot(type, leftRotate)) {    // Try 2 CC
@@ -643,7 +827,7 @@ public strictfp class RobotPlayer {
             return true;
         }
 
-        leftRotate = dir.rotateLeft();
+        leftRotate = leftRotate.rotateLeft();
         dir = dir.rotateRight();
 
         if(rc.canBuildRobot(type, leftRotate)) {    // Try 3 CC
