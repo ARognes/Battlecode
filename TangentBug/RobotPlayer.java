@@ -1,4 +1,4 @@
-package MinerPathfinding;
+package TangentBug;
 import org.apache.commons.lang3.ObjectUtils.Null;
 
 import battlecode.common.*;
@@ -23,18 +23,21 @@ public strictfp class RobotPlayer {
     static MapLocation hqLoc;
     static RobotType rcType;
     static Team rcTeam;
+    static MapLocation rcLoc;
     static int rcState;
     static int mapWidth;
     static int mapHeight;
+    static int highestBid;
+    static int roundBidChecked;
+    static int lock;
 
     static Direction nextFrameSpawnDir; // Used by HQ
     static int minersCreated;
-    static int key1index, key2index, lowestBid;
 
     static MapLocation soupLoc;         // Used by Miner
-    static MapLocation soupDepositLoc;  // Location of lots of soup, away from HQ
+    static MapLocation soupDepositLoc;
     static MapLocation refineryLoc;
-    static int rcTask = 0;
+    static int rcTask;
 
     static boolean boundaryFollow;  // Used by pathfinding
     static Direction moveDir;
@@ -43,8 +46,6 @@ public strictfp class RobotPlayer {
     static boolean clockwise;
     static MapLocation startLoc;
     static int dMin;
-
-
 
 
     /**
@@ -59,15 +60,18 @@ public strictfp class RobotPlayer {
         RobotPlayer.rc = rc;
         rcType = rc.getType();
         rcTeam = rc.getTeam();
+        rcLoc = rc.getLocation();
         rcState = 0;
+        rcTask = 0;
         step = 0;
         mapWidth = rc.getMapWidth();
         mapHeight = rc.getMapHeight();
         boundaryFollow = false;
         minersCreated = 0;
-        key1index = 3;
-        key2index = 5;
-        lowestBid = 1;
+        highestBid = 0;
+        roundBidChecked = Math.max(1, rc.getRoundNum() - 250);  // Check at most 250 rounds before current round
+        lock = GameConstants.GAME_DEFAULT_SEED << ((rc.getTeam() == Team.A) ? 1 : 2);   // Blockchain key only works with team-based lock so this can fight against itself
+        //System.out.println((rc.getTeam() == Team.A) ? "a" : "b");
 
         // Find and save hq location
         RobotInfo[] nearbyRobots = rc.senseNearbyRobots(rc.getCurrentSensorRadiusSquared(), rcTeam);
@@ -86,10 +90,10 @@ public strictfp class RobotPlayer {
                 break;
             case MINER:
                 soupLoc = null;
-                MapLocation rcLoc = rc.getLocation();
                 clockwise = ((rcLoc.x + rcLoc.y) % 2 == 0) ? true : false;   // Randomize somewhat
 
-                if(rc.getTeamSoup() == 62) rcTask = 1;
+                if(rc.getRoundNum() == 2) rcTask = 1;
+                //System.out.println(rc.getRoundNum());
                 break;
             case LANDSCAPER:
                 soupLoc = null;
@@ -136,6 +140,24 @@ public strictfp class RobotPlayer {
         //System.out.println(rcType + " created. Found hq at  "  + hqLoc);
         while (true) {
             step++;
+
+            /*  When rc is created and sits still cooling down, bytecodes should be spent going through Blockchain history to find highest bid of past 250 rounds, or anything else important
+                    Cost per round: 18 Bytecodes
+                    Cost at start: Max - 2000
+            */
+            int i = roundBidChecked;
+            while(Clock.getBytecodesLeft() > 20 && i < rc.getRoundNum() - 1) {    // Search for highest bid from last checked Blochchain to now, but not all at once
+                for(Transaction t : rc.getBlock(i)) {
+                    if(t.getCost() > highestBid) {
+                        int[] m = t.getMessage();
+                        if((m[5] ^ m[2]) != lock) highestBid = t.getCost();  // If message was enemy's, this is their highest bid
+                    }
+                }
+                System.out.println(i);
+                i++;
+            }
+            roundBidChecked = i;
+
             try {
                 switch (rcType) {
                     case HQ:                 runHQ();                break;
@@ -224,24 +246,6 @@ public strictfp class RobotPlayer {
                     if(landscapers > 1 && tryBuildLoose(RobotType.MINER, nextFrameSpawnDir)) minersCreated++;
                 }
 
-
-
-
-                /*int key1 = rc.getID();
-                int key2 = 2*key1;
-                if(soupLoc != null) {
-                    int [] message = {soupLoc[0].x, soupLoc[0].y,666,key1,13,key2,6969};
-                    lowPriorityBlockchain(message);
-                }
-
-                Transaction [] in = rc.getBlock(rc.getRoundNum()-1);
-                for(int i = 0; i < in.length; i++) {
-                    int [] message = in[i].getMessage();
-                    if(message[key2index]/message[key1index] == 2) {
-                        tryBuild(RobotType.MINER, Direction.SOUTH);
-                    }
-                }*/
-
                 // Net gun
                 RobotInfo [] info = rc.senseNearbyRobots();
                 for(int i = 0; i < info.length; i++) {
@@ -256,29 +260,25 @@ public strictfp class RobotPlayer {
     }
 
     /**
-     * Miner's job is to:
-     *      search for soup,
-     *      collect and return soup,
-     *      communicate with HQ,
-     *          report map symmetry features to HQ,
-     *          report context-dependent enemy locations to HQ,
-     *      communicate with Drones when drones are necessary to get across a barrier
-     *      interact with friendly drones properly
-     *      zig-zag away and confuse enemy drones
-     *      find and collect enemy soup before their miners can,
-     *      determine context to build different buildings
-     * 
-     *      early game:
-     *          when soup >= 150, check if hq has design school rad^2 > 8 nearby, if not, build one
+        Miner
      */
     static void runMiner() throws GameActionException {
         int rcRange = rc.getCurrentSensorRadiusSquared();
-        MapLocation rcLoc = rc.getLocation();
         int teamSoup = rc.getTeamSoup();
-        System.out.println(soupLoc);
+        rcLoc = rc.getLocation();
 
 
-        // Search for soup, if find soup
+        int[] listen = getBlockchain(); // Blockchain listening
+
+        if(listen != null) {
+            MapLocation newRefinery = new MapLocation(listen[0], listen[1]);
+            if(newRefinery != null && (refineryLoc == null || newRefinery.distanceSquaredTo(rcLoc) < refineryLoc.distanceSquaredTo(rcLoc))) {
+                refineryLoc = newRefinery;
+                soupLoc = newRefinery;
+            }
+        }
+
+        // Search for soup
         int soupDist = 1000;
         MapLocation[] soupLocs = rc.senseNearbySoup();
         int cumulativeSoup = 0, centerX = 0, centerY = 0;
@@ -300,9 +300,6 @@ public strictfp class RobotPlayer {
             centerX /= soupLocs.length;
             centerY /= soupLocs.length;
         }
-
-
-        //System.out.println(centerX + " | " + centerY + ", " + soupLocs.length);
 
         boolean refineryNearby = false;
         for(RobotInfo nearbyRC : rc.senseNearbyRobots()) {
@@ -327,10 +324,11 @@ public strictfp class RobotPlayer {
                 refineryLoc = soupLoc;
                 // send bcm out
 
-                int key1 = rc.getID();
-                int key2 = 2*key1;
-                int [] message = {refineryLoc.x+500, refineryLoc.y-500,666,key1,13,key2,6969};
-                lowPriorityBlockchain(message);
+                //lowPriorityBlockchain(refineryLoc.x, refineryLoc.y, 666, 13, 6969);
+
+                highPriorityBlockchain(refineryLoc.x, refineryLoc.y, 666, 13, 6969);
+                //logBytecodes();
+
             }
         } else if(rcTask == 2) rcTask = 0;
 
@@ -356,37 +354,15 @@ public strictfp class RobotPlayer {
                         }
                     }
                 }
-                pathfind(rcLoc, hqLoc.translate(hqToCenter.dx * -3, hqToCenter.dy * -3)); 
+                pathfind(hqLoc.translate(hqToCenter.dx * -3, hqToCenter.dy * -3)); 
 
 
             } else if(rcTask == 2) {    // Build refinery
 
-                if(soupLoc != null) pathfind(rcLoc, soupLoc);
+                if(soupLoc != null) pathfind(soupLoc);
                 else rcTask = 0;
 
             } else {
-
-
-                // Blockchain listening
-                
-                Transaction [] in = rc.getBlock(rc.getRoundNum()-1);
-                for(int i = 0; i < in.length; i++) {
-                    int [] message = in[i].getMessage();
-                    if(message[key2index]/message[key1index] == 2) {    // If has key
-                        MapLocation newRefinery = new MapLocation(message[0], message[1]);
-
-                        if(refineryLoc == null || newRefinery.distanceSquaredTo(rcLoc) < refineryLoc.distanceSquaredTo(rcLoc)) {
-                            refineryLoc = newRefinery;
-                        }
-                    }
-                }
-
-
-
-
-
-
-
 
                 if(rcState == 2) {                                            // Searching for Refinery?
 
@@ -410,15 +386,19 @@ public strictfp class RobotPlayer {
                             boundaryFollow = false;
                         }
                     }
-                    else pathfind(rcLoc, closestRefinery);                      // HQ not neighbor? Keep searching for Refinery
+                    else pathfind(closestRefinery);                      // HQ not neighbor? Keep searching for Refinery
                 }
                 else if(rcState < 2) {   // Searching for or mining soup?
 
                     boolean wasMining = (rcState == 1) ? true : false;
                     rcState = 0;                                        // Searching for soup
-                    for (Direction dir : Direction.allDirections())     // Try to mine soup everywhere
-                        if(tryMine(dir)) rcState = 1;                   // Mined soup? Stop searching
-                    
+                    for (Direction dir : Direction.allDirections()) {   // Try to mine soup everywhere
+                        if(rc.canMineSoup(dir)) {                       // Mined soup? Stop searching
+                            rc.mineSoup(dir);
+                            rcState = 1;
+                        }
+                    }
+
                     soupAmount = rc.getSoupCarrying();
                     //if(rcState == 1) System.out.println("Slurped " + soupAmount + " slurps!"); // DEBUG
 
@@ -438,7 +418,7 @@ public strictfp class RobotPlayer {
                         else soupLoc = null;   // If no more soup, but not full, restart search!
                     }
 
-                    if(soupLoc != null) pathfind(rcLoc, soupLoc);
+                    if(soupLoc != null) pathfind(soupLoc);
                     else {    // Still searching for soup and haven't found any?
                         if(moveDir == null) moveDir = Direction.NORTHEAST;
                         if(rc.canMove(moveDir)) rc.move(moveDir);
@@ -480,7 +460,7 @@ public strictfp class RobotPlayer {
      *  if hit barrier, minimal A* the way out,
      *  if stuck in concave shape, bug it out
      */
-    static void pathfind(MapLocation rcLoc, MapLocation endLoc) throws GameActionException {
+    static void pathfind(MapLocation endLoc) throws GameActionException {
         if(!rc.isReady()) return;
         int rcRange = rc.getCurrentSensorRadiusSquared();
         int rcElev = rc.senseElevation(rcLoc);
@@ -545,7 +525,6 @@ public strictfp class RobotPlayer {
                 hitWall = true;
             }
 
-
         } else {    // Pathfind
             boolean first = true;   // The optimalDirection should be based off the first movement towards endLoc, not the last. In testing they would jump in water sometimes because of this
             while(checkX * checkX + checkY * checkY < rcRange) {
@@ -580,7 +559,6 @@ public strictfp class RobotPlayer {
 
                     //dCost = Math.max(Math.abs(checkX - d.dx), Math.abs(checkY - d.dy)) + Math.max(Math.abs(startEndX - (checkX - d.dx)), Math.abs(startEndY - (checkY  - d.dy))); // Get optimal cost of tile before collision
                     if(checkX - d.dx + checkY - d.dy != 0) optimalCost = Math.max(Math.abs(checkX - d.dx), Math.abs(checkY - d.dy)) + Math.max(Math.abs(startEndX - (checkX - d.dx)), Math.abs(startEndY - (checkY  - d.dy))); // Get optimal cost of tile before collision
-                //System.out.println("CHECK DCOST " + dCost);       // DEBUG
                     startEndX = checkX; // Vector from start to collided tile
                     startEndY = checkY;
 
@@ -743,15 +721,11 @@ public strictfp class RobotPlayer {
                 consecutiveTurns = 0;
                 hitWall = false;
                 moveDir = rcLoc.directionTo(endLoc);
-
                 moveDir = clockwise ? moveDir.rotateLeft().rotateLeft() : moveDir.rotateRight().rotateRight();    // Arbitrarily search clockwise, optimize this later
-
                 startLoc = rcLoc;
-
                 dMin = optimalCost;
-                //System.out.println("boundaryFollow: " + optimalCost);
-            } //else dMin = optimalCost;
-            //System.out.println("DONE! " + optimalDir.toString());
+            }
+
             if(rc.canMove(optimalDir)) rc.move(optimalDir);       // Check if can move, just to avoid any possible errors that haven't been accounted for
             startLoc = rcLoc.add(optimalDir);
         }
@@ -774,7 +748,7 @@ public strictfp class RobotPlayer {
         if(rc.getTeamSoup() >= 150 && (minersCreated < 2 || (hitWall && minersCreated < 16))) {
             if(tryBuild(RobotType.LANDSCAPER, rc.getLocation().directionTo(new MapLocation(mapWidth/2, mapHeight/2)).rotateRight().rotateRight())) minersCreated++;
             else if(tryBuild(RobotType.LANDSCAPER, rc.getLocation().directionTo(new MapLocation(mapWidth/2, mapHeight/2)).rotateLeft().rotateLeft())) minersCreated++;
-            System.out.println(minersCreated);
+            //System.out.println(minersCreated);
         }
     }
 
@@ -788,8 +762,14 @@ public strictfp class RobotPlayer {
      * 
      */
     static void runLandscaper() throws GameActionException {
+        rcLoc = rc.getLocation();   // Bury neighbor enemy buildings
+        int distToHQ = rcLoc.distanceSquaredTo(hqLoc);
+        // Save HQ
+        if(rc.isReady()) {
+            Direction checkHQ = rcLoc.directionTo(hqLoc);
+            if(rc.canDigDirt(checkHQ) && distToHQ < 3) rc.digDirt(checkHQ);
+        }
 
-        MapLocation rcLoc = rc.getLocation();   // Bury neighbor enemy buildings
         if(rc.getDirtCarrying() > 0) {
             RobotInfo[] nearbyEnemies = rc.senseNearbyRobots(rc.getCurrentSensorRadiusSquared(), rcTeam.opponent());
             MapLocation enemyLoc;
@@ -800,7 +780,7 @@ public strictfp class RobotPlayer {
                     if(rcLoc.distanceSquaredTo(enemyLoc) < 3) {
                         Direction rcToEnemy = rcLoc.directionTo(enemyLoc);
                         if(rc.canDepositDirt(rcToEnemy)) rc.depositDirt(rcToEnemy);
-                    } else pathfind(rcLoc, enemyLoc);
+                    } else pathfind(enemyLoc);
                 }
             }
         }
@@ -861,13 +841,13 @@ public strictfp class RobotPlayer {
                 if(soupLoc != rcLoc && step > 60) soupLoc = soupLoc.add(soupLoc.directionTo(rcLoc));
                 //rc.setIndicatorDot(soupLoc, 255, 0, 0);
 
-                int distToHQ = rcLoc.distanceSquaredTo(hqLoc);
+                //int distToHQ = rcLoc.distanceSquaredTo(hqLoc);
                 
                 if(rcLoc.x == soupLoc.x && rcLoc.y == soupLoc.y) {
                     if(rc.isReady()) {
-                        Direction checkHQ = rcLoc.directionTo(hqLoc);
-                        if(rc.canDigDirt(checkHQ) && distToHQ < 3) rc.digDirt(checkHQ);
-                        else {
+                        //Direction checkHQ = rcLoc.directionTo(hqLoc);
+                        //if(rc.canDigDirt(checkHQ) && distToHQ < 3) rc.digDirt(checkHQ);
+                        //else {
                             
                             if(rc.getDirtCarrying() > 0) {
                                 rc.depositDirt(Direction.CENTER);
@@ -907,10 +887,10 @@ public strictfp class RobotPlayer {
                                     if(rcLoc.add(d).distanceSquaredTo(hqLoc) == 4 && rc.canDigDirt(d)/* && rc.senseRobotAtLocation(rcLoc.add(d)) == null*/) rc.digDirt(d);
                                 }
                             }
-                        }
+                        //}
                     }
                 } else {    // Go to assigned location
-                    System.out.println(soupLoc + "B");
+                    //System.out.println(soupLoc + "B");
                     /*if(rcLoc.distanceSquaredTo(soupLoc) < 3 && rc.isReady()) {  // Can't move to assigned location due to elevation difference
                         int deltaDirt = rc.senseElevation(rcLoc) - rc.senseElevation(soupLoc);  // Difference in dirt from current location to assigned location
                         Direction dirToAssigned = rcLoc.directionTo(soupLoc);
@@ -925,7 +905,7 @@ public strictfp class RobotPlayer {
                         }
                     }*/
 
-                    pathfind(rcLoc, soupLoc);
+                    pathfind(soupLoc);
                 }
             }
         }
@@ -1019,67 +999,49 @@ public strictfp class RobotPlayer {
     }
 
     /**
-     * Attempts to mine soup in a given direction.
-     *
-     * @param dir The intended direction of mining
-     * @return true if a move was performed
-     * @throws GameActionException
+     * Make sure this message gets sent now
+     *      58 Bytecodes
+     * 
+     * @param message
      */
-    static boolean tryMine(Direction dir) throws GameActionException {
-        if (rc.isReady() && rc.canMineSoup(dir)) {
-            rc.mineSoup(dir);
-            return true;
-        } else return false;
+    static void highPriorityBlockchain(int a, int b, int c, int d, int e) throws GameActionException {
+        int key = (rc.getID() + rc.getRoundNum()) ^ 777; // Create key
+        int[] message = new int[]{(b ^ 666), (c ^ 666), key, (e ^ 666), (a ^ 666), key ^ lock, (d ^ 666)};   // ^, xor costs 1 bytecode and is an invertible function Hell yes
+        if(rc.canSubmitTransaction(message, highestBid + 1)) rc.submitTransaction(message, highestBid + 1);
+    }
+    
+    /**
+     * Send this message at minimal cost
+     * 
+     * @param a-e int messages
+     */
+    static void lowPriorityBlockchain(int a, int b, int c, int d, int e) throws GameActionException {
+        int lowestBid = 1;  // Get lowest bid of last step
+        for(Transaction t : rc.getBlock(rc.getRoundNum()-2)) 
+            if(t.getCost() < lowestBid) lowestBid = t.getCost();
+
+        int key = (rc.getID() + rc.getRoundNum()) ^ 777; // Create key
+        int[] message = new int[]{(b ^ 666), (c ^ 666), key, (e ^ 666), (a ^ 666), key ^ lock, (d ^ 666)};   // ^, xor: an invertible function Hell yes, this line costs 58 bytecode
+
+        if(rc.canSubmitTransaction(message, lowestBid)) rc.submitTransaction(message, lowestBid);
     }
 
     /**
-     * Attempts to refine soup in a given direction.
-     *
-     * @param dir The intended direction of refining
-     * @return true if a move was performed
-     * @throws GameActionException
+     * Drawback is that if more than one message is sent on our side it will not be read, however this is extremely rare
+     *      117 Bytecodes
+     * 
+     * @return Decoded Blockchain information, 5 ints
      */
-    static boolean tryRefine(Direction dir) throws GameActionException {
-        if (rc.isReady() && rc.canDepositSoup(dir)) {
-            rc.depositSoup(dir, rc.getSoupCarrying());
-            return true;
-        } else return false;
-    }
-
-
-    static void tryBlockchain() throws GameActionException {
-        if (step < 3) {
-            int[] message = new int[7];
-            for (int i = 0; i < 7; i++) {
-                message[i] = 123;
+    static int[] getBlockchain() throws GameActionException {
+        int lastRound = rc.getRoundNum()-1;
+        for(Transaction t : rc.getBlock(lastRound)) {
+            int [] message = t.getMessage();
+            if((message[5] ^ message[2]) == lock) {
+                if((message[2] ^ 777) - lastRound == rc.getID()) continue;  // Don't hear the sound of rc's own voice
+                return new int[]{(message[4] ^ 666), (message[0] ^ 666), (message[1] ^ 666), (message[6] ^ 666), (message[3] ^ 666)};
             }
-            if (rc.canSubmitTransaction(message, 10))
-                rc.submitTransaction(message, 10);
         }
-        // System.out.println(rc.getRoundMessages(step-1));
-    }
-
-
-    /*static void highPriorityBlockchain(int [] message) throws GameActionException {
-    	if(message[key2index]/message[key1index] != 2) {
-    		highestBid++;
-    	}
-        if (rc.canSubmitTransaction(message, highestBid)) {
-            rc.submitTransaction(message, highestBid);
-            System.out.println(highestBid);
-        }
-        System.out.println(highestBid + "was highest bid");
-    }*/
-    
-    static void lowPriorityBlockchain(int [] message) throws GameActionException {
-    	if(message[key2index]/message[key1index] != 2) {
-    		lowestBid ++;
-    	}
-        if (rc.canSubmitTransaction(message, lowestBid)) {
-            rc.submitTransaction(message, lowestBid);
-            System.out.println(lowestBid);
-         }
-         System.out.println(lowestBid + "was lowest bid");
+        return null;
     }
     
     /*static int getHighestBid(Transaction [] in) {
@@ -1092,15 +1054,14 @@ public strictfp class RobotPlayer {
     	return highest;
     }*/
     
-    static int getLowestBid(Transaction [] in) {
+    /*static int getLowestBid(Transaction [] in) {
+        if(in.length == 0) return 1;
     	int lowest = Integer.MAX_VALUE;
-    	for(int i = 0; i < in.length; i++) {
-    		if(in[i].getCost() < lowest) {
-    			lowest = in[i].getCost();
-    		}
-    	}
+    	for(Transaction t : in) 
+            if(t.getCost() < lowest) lowest = t.getCost();
+        
     	return lowest;
-    }
+    }*/
 
 
     static void logBytecodes() {
