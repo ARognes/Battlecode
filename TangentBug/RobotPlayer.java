@@ -1,4 +1,4 @@
-package TangentBug;
+package MinerPathfinding;
 import org.apache.commons.lang3.ObjectUtils.Null;
 
 import battlecode.common.*;
@@ -19,27 +19,28 @@ public strictfp class RobotPlayer {
     // Well, your team member ARognes was creating copious amounts of variables that needed to survive multiple turns,
     // thus he invoked static variable hell through Satanic ritual!
 
-    static int step;        // Used my most Robots
+    static int step = 0;        // Used my most Robots
     static MapLocation hqLoc;
     static RobotType rcType;
     static Team rcTeam;
     static MapLocation rcLoc;
-    static int rcState;
+    static int rcState = 0;
     static int mapWidth;
     static int mapHeight;
-    static int highestBid;
+    static int highestBid = 0;
     static int roundBidChecked;
     static int lock;
 
     static Direction nextFrameSpawnDir; // Used by HQ
-    static int minersCreated;
+    static int minersCreated = 0;
 
     static MapLocation soupLoc;         // Used by Miner
     static MapLocation soupDepositLoc;
     static MapLocation refineryLoc;
-    static int rcTask;
+    static int rcTask = 0;
+    static boolean[][] nodes;
 
-    static boolean boundaryFollow;  // Used by pathfinding
+    static boolean boundaryFollow = false;  // Used by pathfinding
     static Direction moveDir;
     static int consecutiveTurns;
     static boolean hitWall;
@@ -55,20 +56,12 @@ public strictfp class RobotPlayer {
     @SuppressWarnings("unused")
     public static void run(RobotController rc) throws GameActionException {
 
-        // This is the RobotController object. You use it to perform actions from this robot,
-        // and to get information on its current status.
         RobotPlayer.rc = rc;
         rcType = rc.getType();
         rcTeam = rc.getTeam();
         rcLoc = rc.getLocation();
-        rcState = 0;
-        rcTask = 0;
-        step = 0;
         mapWidth = rc.getMapWidth();
         mapHeight = rc.getMapHeight();
-        boundaryFollow = false;
-        minersCreated = 0;
-        highestBid = 0;
         roundBidChecked = Math.max(1, rc.getRoundNum() - 250);  // Check at most 250 rounds before current round
         lock = GameConstants.GAME_DEFAULT_SEED << ((rc.getTeam() == Team.A) ? 1 : 2);   // Blockchain key only works with team-based lock so this can fight against itself
 
@@ -83,13 +76,14 @@ public strictfp class RobotPlayer {
         //Direction hqToCenter;
         switch(rcType) {
             case HQ: 
-                hqLoc = rc.getLocation();
+                hqLoc = rcLoc;
                 nextFrameSpawnDir = null;
 
                 break;
             case MINER:
                 soupLoc = null;
                 clockwise = ((rcLoc.x + rcLoc.y) % 2 == 0) ? true : false;   // Randomize somewhat
+                nodes = new boolean[mapWidth / 6][mapHeight / 6];
 
                 if(rc.getRoundNum() == 2) rcTask = 1;
                 //System.out.println(rc.getRoundNum());
@@ -139,6 +133,7 @@ public strictfp class RobotPlayer {
         //System.out.println(rcType + " created. Found hq at  "  + hqLoc);
         while (true) {
             step++;
+            rcLoc = rc.getLocation();
 
             /*  When rc is created and sits still cooling down, bytecodes should be spent going through Blockchain history to find highest bid of past 250 rounds, or anything else important
                     Cost per round: 18 Bytecodes
@@ -261,27 +256,42 @@ public strictfp class RobotPlayer {
 
     /**
         Miner
+            Listen for blockchain,
+            Sense environment,
+            Build refinery if needed,
+            if ready,
+                task 1: Build Design School near HQ
+                task 2: Go to center of soup deposit
+                default:
+                    state 2: Go to refinery
+                    state 1: Mining soup
+                    state 0: Go to soup
+
+
      */
     static void runMiner() throws GameActionException {
         int rcRange = rc.getCurrentSensorRadiusSquared();
         int teamSoup = rc.getTeamSoup();
-        rcLoc = rc.getLocation();
 
-
-        int[] listen = getBlockchain(); // Blockchain listening
-
+        //#region Blockchain Listening
+        int[] listen = getBlockchain();
         if(listen != null) {
-            MapLocation newRefinery = new MapLocation(listen[0], listen[1]);
-            if(newRefinery != null && (refineryLoc == null || newRefinery.distanceSquaredTo(rcLoc) < refineryLoc.distanceSquaredTo(rcLoc))) {
+            MapLocation newRefinery = new MapLocation(listen[0], listen[1]);    // Listen for new refinery location
+            if(newRefinery != null && (refineryLoc == null || newRefinery.distanceSquaredTo(rcLoc) < refineryLoc.distanceSquaredTo(rcLoc) || rcState == 0)) {
                 refineryLoc = newRefinery;
                 soupLoc = newRefinery;
             }
-        }
 
+            // Listen for new soup defosit
+
+            // Listen for node searched
+        }
+        //#endregion
+
+        //#region Sense Environment
         int soupDist = 1000;
         MapLocation[] soupLocs = rc.senseNearbySoup();
         int cumulativeSoup = 0, centerX = 0, centerY = 0;
-
         for(MapLocation thisSoupLoc : soupLocs) {           // Search for closest soup and check out soup deposits
             if(soupLoc == null || rcLoc.distanceSquaredTo(thisSoupLoc) < soupDist) {   // If this soup is closer than closest soup
                 soupLoc = thisSoupLoc;                                             // This soup is closest soup
@@ -313,7 +323,9 @@ public strictfp class RobotPlayer {
                 soupLoc = hqLoc;
             }
         }
+        //#endregion
 
+        //#region Build Refinery
         if(cumulativeSoup >= 400 && !refineryNearby && centerX != 0 && centerY != 0 && rcTask != 1 && rcLoc.distanceSquaredTo(hqLoc) > 16) {  // If a refinery should be built
             rcTask = 2;
             soupLoc = new MapLocation(centerX, centerY);
@@ -324,18 +336,15 @@ public strictfp class RobotPlayer {
                 lowPriorityBlockchain(refineryLoc.x, refineryLoc.y, 666, 13, 6969);
             }
         } else if(rcTask == 2) rcTask = 0;
-
-
-
+        //#endregion
 
         if(soupLoc != null && hqLoc.distanceSquaredTo(soupLoc) > 4) soupDepositLoc = soupLoc;
 
         if(rc.isReady()) {  // Cooldown < 1
             int soupAmount = rc.getSoupCarrying();
             if(soupLoc != null && rcLoc.distanceSquaredTo(soupLoc) < rcRange && rc.senseSoup(soupLoc) < 1 && rcTask == 0) soupLoc = null;    // Where did the soup go?
-            System.out.println(rcTask);
+
             if(rcTask == 1 && rc.getTeamSoup() >= 150) {    // Build design school
-                System.out.println("Trying!");
                 
                 Direction centerToHQ = new MapLocation(mapWidth / 2, mapHeight / 2).directionTo(hqLoc);
                 Direction hqToCenter = centerToHQ.opposite();
@@ -348,18 +357,15 @@ public strictfp class RobotPlayer {
                     MapLocation checkLoc = hqLoc.add(checkDir);
 
                     if(rc.canSenseLocation(checkLoc) && !rc.senseFlooding(checkLoc) && Math.abs(rc.senseElevation(checkLoc) - elevRef) < 8) { // If within sense range, not flooded, and surmountable by HQ
-                        //if(optimalLoc == null) 
                         optimalLoc = checkLoc;
                         elevRef = rc.senseElevation(checkLoc);
                         checkLoc = checkLoc.add(checkDir);
                         if(rc.canSenseLocation(checkLoc) && !rc.senseFlooding(checkLoc) && Math.abs(rc.senseElevation(checkLoc) - elevRef) < 8) { // If within sense range, not flooded, and surmountable by last location
-                            //if(optimalLoc == null) 
                             optimalLoc = checkLoc;
                             elevRef = rc.senseElevation(checkLoc);
                             checkLoc = checkLoc.add(checkDir);
                             if(rc.canSenseLocation(checkLoc) && !rc.senseFlooding(checkLoc) && Math.abs(rc.senseElevation(checkLoc) - elevRef) < 8) {
                                 if(checkDir.dx == 0 || checkDir.dy == 0) {
-                                    //if(optimalLoc == null) 
                                     optimalLoc = checkLoc;
                                     elevRef = rc.senseElevation(checkLoc);
                                     checkLoc = checkLoc.add(checkDir);
@@ -375,7 +381,7 @@ public strictfp class RobotPlayer {
 
 
 
-            } else if(rcTask == 2) {    // Build refinery
+            } else if(rcTask == 2) {    // Go to center of soup deposit
 
                 if(soupLoc != null) pathfind(soupLoc);
                 else rcTask = 0;
@@ -387,8 +393,6 @@ public strictfp class RobotPlayer {
                     MapLocation closestRefinery = refineryLoc;
                     if(closestRefinery == null) closestRefinery = hqLoc;
 
-                    //rc.setIndicatorDot(hqLoc, 255, 255, 255);
-
                     if(rcLoc.distanceSquaredTo(closestRefinery) < 3) {                      // HQ is neighbor?
                         RobotInfo closestR = rc.senseRobotAtLocation(closestRefinery);
                         if(closestR.getType() == RobotType.REFINERY || closestR.getType() == RobotType.HQ) rc.depositSoup(rcLoc.directionTo(closestRefinery), soupAmount);     // Deposit soup
@@ -398,8 +402,7 @@ public strictfp class RobotPlayer {
                         }
 
                         if(rc.getSoupCarrying() < 1) {
-                            //System.out.println("Deposited soup!");                      // DEBUG
-                            rcState = 0;                                                // Go collect more soup!
+                            rcState = 0;                // Go collect more soup!
                             soupLoc = soupDepositLoc;   // Set soup to null unless an array of far away soup in 
                             boundaryFollow = false;
                         }
@@ -418,9 +421,8 @@ public strictfp class RobotPlayer {
                     }
 
                     soupAmount = rc.getSoupCarrying();
-                    //if(rcState == 1) System.out.println("Slurped " + soupAmount + " slurps!"); // DEBUG
 
-                    if(wasMining) {
+                    //if(wasMining) {
                         if(soupAmount == RobotType.MINER.soupLimit) {
                             soupLoc = hqLoc;
                             rcState = 2;   // Full? Go search for Refinery
@@ -433,8 +435,8 @@ public strictfp class RobotPlayer {
                                 dMin = Math.max(Math.abs(hqLoc.x - rcLoc.x), Math.abs(hqLoc.y - rcLoc.y));
                             }
                         }
-                        else soupLoc = null;   // If no more soup, but not full, restart search!
-                    }
+                        else if(rcState == 0 && wasMining) soupLoc = null;   // If no more soup, but not full, restart search!
+                    //}
 
                     if(soupLoc != null) pathfind(soupLoc);
                     else {    // Still searching for soup and haven't found any?
@@ -450,15 +452,17 @@ public strictfp class RobotPlayer {
                             if(consecutiveTurns > 0) consecutiveTurns = 3;
                         }
 
-                        if(rc.canMove(moveDir)) rc.move(moveDir);
-                        else if(consecutiveTurns > 0) {
-                            moveDir = moveDir.rotateLeft();
-                            consecutiveTurns--;
-                            if(consecutiveTurns <= 0) consecutiveTurns = -2;
-                        } else {
-                            moveDir = moveDir.rotateRight();
-                            consecutiveTurns++;
-                            if(consecutiveTurns > 0) consecutiveTurns = 3;
+                        if(step % 3 == 0) {
+                            if(rc.canMove(moveDir)) rc.move(moveDir);
+                            else if(consecutiveTurns > 0) {
+                                moveDir = moveDir.rotateLeft();
+                                consecutiveTurns--;
+                                if(consecutiveTurns <= 0) consecutiveTurns = -2;
+                            } else {
+                                moveDir = moveDir.rotateRight();
+                                consecutiveTurns++;
+                                if(consecutiveTurns > 0) consecutiveTurns = 3;
+                            }
                         }
                     }
 
@@ -470,8 +474,10 @@ public strictfp class RobotPlayer {
                 }
             }
         }
-        //if(soupLoc != null) rc.setIndicatorDot(soupLoc, 255, 255, 255);
+        if(soupLoc != null) rc.setIndicatorDot(soupLoc, 255, 255, 255);
     }
+
+
 
     /**
      *  Caste ray from rc to end,
@@ -789,7 +795,6 @@ public strictfp class RobotPlayer {
      * 
      */
     static void runLandscaper() throws GameActionException {
-        rcLoc = rc.getLocation();   // Bury neighbor enemy buildings
 
         if(rc.getDirtCarrying() > 0) {
             RobotInfo[] nearbyEnemies = rc.senseNearbyRobots(rc.getCurrentSensorRadiusSquared(), rcTeam.opponent());
@@ -1074,6 +1079,6 @@ public strictfp class RobotPlayer {
     }
 
     static void logBytecodes() {
-        System.out.println("\nBC Used:" + Clock.getBytecodeNum() + "\tLeft: " + Clock.getBytecodesLeft());
+        //System.out.println("\nBC Used:" + Clock.getBytecodeNum() + "\tLeft: " + Clock.getBytecodesLeft());
     }
 }
