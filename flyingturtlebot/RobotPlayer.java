@@ -1279,14 +1279,12 @@ public strictfp class RobotPlayer {
     		for(Direction dir : directions) {
     			if(rc.senseFlooding(rc.adjacentLocation(dir))) {
         			rc.dropUnit(dir);
-        			System.out.println("Dropping unit" + dir);
         			return;
         		}
     		}
     		if(!tryMove(rc.getLocation().directionTo(mapCenter))) {
     			tryMove(randomDirection());
     		}
-    		System.out.println("Going to" + mapCenter);
     	}
     }
     
