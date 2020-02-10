@@ -9,13 +9,13 @@ Austin Rognes
 ## Strategy
 
 Our plan had a few steps:
-    1. Mine nearby soup with 3 miners
-    2. Build refinery and design school
-    3. Build 20 landscapers
-    4. Terraform land nearby HQ to raise it to a height based on time
-    5. A designated miner builds every other building for luxury defense
-    6. Once round 600 is reached, all landscapers surround HQ and begin building the wall
-    7. On round 700, any drones will clump our HQ to shield any invasion attemps
+1. Mine nearby soup with 3 miners
+2. Build refinery and design school
+3. Build 20 landscapers
+4. Terraform land nearby HQ to raise it to a height based on time
+5. A designated miner builds every other building for luxury defense
+6. Once round 600 is reached, all landscapers surround HQ and begin building the wall
+7. On round 700, any drones will clump our HQ to shield any invasion attemps
 
 ## Analytics
 ![Points over time analytic](Annotation0.png)
