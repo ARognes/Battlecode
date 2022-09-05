@@ -1,5 +1,10 @@
 # MIT Battlecode 2020 Competition Post-Mortem
-Iowa State University Artificial Intelligence Club members Austin Rognes and Augusto Savaris participated in the competition.
+
+## Summary
+[MIT Battlecode](https://battlecode.org/) is an annual programming competition where a team must create the best AI to win in against other teams.
+Each team was given an HQ and a few types of units and buildings that could be puchased using soup. Our team wrote Python scripts to define our miners/landscapers/drones/HQ behavior during the game. All of our AI units had to work together in different environments to not only thrive, but also attack and destroy the enemy HQ.
+
+In the end, we honed our AI on the optimal environment, where our AI flourished and was very strong. Every environment that was not perfect however mostly ended in failure.
 
 Team name: AI Club Iowa State
 
